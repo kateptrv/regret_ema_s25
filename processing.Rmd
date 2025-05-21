@@ -16,7 +16,7 @@ df_ema <- ema %>%
   mutate(PING_NUM = row_number()) %>%
   ungroup() %>%
   select(-c(StartDate, EndDate, Status, IPAddress, Progress, RecordedDate, ResponseId, RecipientLastName, RecipientFirstName, RecipientEmail, LocationLatitude, LocationLongitude, DistributionChannel, ExternalReference, `Duration (in seconds)`, Finished, UserLanguage)) %>%
-    relocate(PID) %>%
+    relocate(PID, DAY_NUM, SURVEY_TYPE, DECISION, DECISION_TO_SHOW, NEXT_SURVEY) %>%
     filter(PID != "000000")
 ```
 
@@ -89,7 +89,6 @@ event_summary_overall <- event_summary_pid %>%
     max_followups = max(max_followups)
   )
 print(event_summary_overall)
-
 
 #Na's due to only one event? 
 ```
