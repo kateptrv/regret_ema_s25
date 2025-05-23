@@ -1,21 +1,23 @@
 ```{r}
 library(dplyr)
+library(tidyr)
 library(lubridate)
 library(readr)
 library(stringr)
-ema <- readr::read_csv("data/regret_ema.csv")
-intake <-readr::read_csv("data/regret_ema_intake.csv")
+library(qualtRics)
+ema <- read_survey("data/regret_ema.csv")
+intake <- read_survey("data/regret_ema_intake.csv")
 ```
 
 ```{r}
 df_ema <- ema %>%
-  filter(str_detect(RecordedDate, "^\\d{4}-\\d{2}-\\d{2}")) %>%  # eliminate junk rows.. lmk if you want me to move away from regex
+  #filter(str_detect(RecordedDate, "^\\d{4}-\\d{2}-\\d{2}")) %>%  # eliminate junk rows.. lmk if you want me to move away from regex
   mutate(RecordedDate = ymd_hms(RecordedDate)) %>%
   arrange(PID, RecordedDate) %>%
   group_by(PID) %>%
   mutate(PING_NUM = row_number()) %>%
   ungroup() %>%
-  select(-c(StartDate, EndDate, Status, IPAddress, Progress, RecordedDate, ResponseId, RecipientLastName, RecipientFirstName, RecipientEmail, LocationLatitude, LocationLongitude, DistributionChannel, ExternalReference, `Duration (in seconds)`, Finished, UserLanguage)) %>%
+  select(-c(StartDate:UserLanguage)) %>%
     relocate(PID, DAY_NUM, SURVEY_TYPE, DECISION, DECISION_TO_SHOW, NEXT_SURVEY) %>%
     filter(PID != "000000")
 ```
@@ -26,20 +28,32 @@ df_intake <- intake %>%
   arrange(desc(rowSums(!is.na(.)))) %>%
   slice(1) %>%
   ungroup() %>%
-  select(-c(StartDate, EndDate, Status, IPAddress, Progress, RecordedDate, ResponseId, RecipientLastName, RecipientFirstName, RecipientEmail, LocationLatitude, LocationLongitude, DistributionChannel, ExternalReference, `Duration (in seconds)`, Finished, UserLanguage)) %>%
+  select(-c(StartDate:UserLanguage)) %>%
    relocate(PID) %>%
     filter(PID != "000000")
 ```
 
 ```{r}
 df_ema_intake <- df_ema %>%
+  #unite("resolved", `resolved...28`, `resolved...47`) %>%
     rename(resolved = `resolved...28`) %>%
     mutate(
     regret_yn = as.numeric(regret_yn),
     resolved = as.numeric(resolved)
   ) %>%
+  mutate(SURVEY_TYPE = ifelse(is.na(SURVEY_TYPE), "first", SURVEY_TYPE)) %>%
   left_join(df_intake, by = "PID") %>%
   arrange(PID, PING_NUM) %>%
+  group_by(PID) %>%
+  mutate(regret_START = ifelse(
+    (regret_yn == 2 & resolved == 2),
+    1, 0)) %>%
+  mutate(
+    regret_END = ifelse(SURVEY_TYPE == "followup" & lead(SURVEY_TYPE == "general"),
+                         1, 0)
+    ) %>%
+  # if survey_type==followup, find the PING_NUM where regret_START == 1, PING_NUM where regret_end == 1; fill the followup_inxed with row_number (1 2 3...)
+  # regret_index within participant 
   mutate(regret_index = {
     idx <- rep(NA_integer_, n())
     counter <- 1
