@@ -1,0 +1,129 @@
+```{r}
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(readr)
+library(stringr)
+library(qualtRics)
+library(zoo)
+ema <- read_survey("data/regret_ema.csv")
+intake <- read_survey("data/regret_ema_intake.csv")
+```
+
+```{r}
+df_ema <- ema %>%
+  #filter(str_detect(RecordedDate, "^\\d{4}-\\d{2}-\\d{2}")) %>%  # eliminate junk rows.. lmk if you want me to move away from regex
+  mutate(RecordedDate = ymd_hms(RecordedDate)) %>%
+  arrange(PID, RecordedDate) %>%
+  group_by(PID) %>%
+  mutate(PING_NUM = row_number()) %>%
+  ungroup() %>%
+  select(-c(StartDate:UserLanguage)) %>%
+    relocate(PID, DAY_NUM, SURVEY_TYPE, DECISION, DECISION_TO_SHOW, NEXT_SURVEY) %>%
+    filter(PID != "000000")
+```
+
+```{r}
+df_intake <- intake %>%
+  group_by(PID) %>%
+  arrange(desc(rowSums(!is.na(.)))) %>%
+  slice(1) %>%
+  ungroup() %>%
+  select(-c(EndDate:UserLanguage)) %>%
+   relocate(PID) %>%
+    filter(PID != "000000")
+```
+
+```{r}
+df_ema_intake <- df_ema %>%
+    mutate(resolved_fu = as.numeric(`resolved...59`),
+           resolved_gen = as.numeric(`resolved...34`)) %>%
+    mutate(resolved = coalesce(resolved_fu, resolved_gen)) %>%
+    select(-c(`resolved...59`, `resolved...34`, resolved_gen, resolved_fu)) %>%
+  mutate(SURVEY_TYPE = ifelse(is.na(SURVEY_TYPE), "first", SURVEY_TYPE)) %>%
+  left_join(df_intake, by = "PID") %>%
+  arrange(PID, PING_NUM) %>%
+  group_by(PID) %>%
+  mutate(
+    regret_START = ifelse(regret_yn == 2, 1, NA),
+    regret_END = ifelse(
+      (regret_yn == 2 & resolved == 1 ) |
+      (SURVEY_TYPE == "followup" & lead(SURVEY_TYPE) == "general"),
+      1, NA
+    )) |>
+    mutate(regret_count = sum(regret_START == 1, na.rm = TRUE)
+  ) |>
+  mutate(regret_status = case_when(
+    regret_START == 1 & is.na(regret_END) ~ "START",
+    regret_END == 1 & is.na(regret_START) ~ "END",
+    regret_START == 1 & regret_END == 1 ~ "STARTEND",
+  )) |>
+  mutate(regret_marker = case_when(
+    regret_status == "START"     ~ 1,
+    regret_status == "STARTEND" ~ 2,
+    regret_status == "END"       ~ -1,
+    TRUE                         ~ 0
+  )) %>%
+  mutate(
+    regret_active = {
+      flag <- 0
+      state <- integer(n())
+      for (i in seq_along(regret_marker)) {
+        if (regret_marker[i] == 1) {
+          flag <- 1
+          state[i] <- 1
+        } else if (regret_marker[i] == 2) {
+          state[i] <- 1
+        } else if (regret_marker[i] == -1) {
+          state[i] <- flag
+          flag <- 0
+        } else {
+          state[i] <- flag
+        }
+      }
+      state
+    }
+  ) |> 
+  select(-regret_marker) |>
+  
+  
+#readr::write_csv(df_ema_intake, "processed_merged.csv")
+```
+
+```{r}
+df_ema_intake |>
+  mutate(Date = ymd_hms(StartDate)) |>
+  filter(Date <= "2025-5-24") |>
+  group_by(PID) |>
+  summarise(num_pings = n()) |>
+  arrange(PID)
+  
+```
+
+
+```{r}
+distinct_events <- df_ema_intake %>%
+  filter(!is.na(regret_index)) %>%
+  group_by(PID, regret_index) %>%
+  summarise(followups = n(), .groups = "drop") # to get one row per ping
+
+event_summary_pid <- distinct_events %>%
+  group_by(PID) %>% 
+  summarise(num_events = n(), avg_followups = mean(followups), sd_followups = sd(followups), min_followups = min(followups), max_followups = max(followups))
+print(event_summary_pid)
+
+event_summary_overall <- event_summary_pid %>%
+  summarise(
+    M_events = mean(num_events),
+    SD_events = sd(num_events),
+    min_events = min(num_events),
+    max_events = max(num_events),
+    M_followups = mean(avg_followups),
+    SD_followups = sd(avg_followups),
+    min_followups = min(min_followups),
+    max_followups = max(max_followups)
+  )
+print(event_summary_overall)
+
+#Na's due to only one event? 
+```
