@@ -163,7 +163,26 @@ df_ema_intake <- df_ema %>%
          regret = emotions_7,
          disappointment = emotions_8) |>
   # removing consent variables
-  select(-c(welcome, reap_downloaded))
+  select(-c(welcome, reap_downloaded)) |>
+  mutate(er_reapp = ifelse(!is.na(regret_id) & is.na(er_reapp), 0, er_reapp),
+         er_pleasure = ifelse(!is.na(regret_id) & is.na(er_pleasure), 0, er_pleasure),
+         er_distract = ifelse(!is.na(regret_id) & is.na(er_distract), 0, er_distract),
+         er_sitmod = ifelse(!is.na(regret_id) & is.na(er_sitmod), 0, er_sitmod),
+         er_socsupp = ifelse(!is.na(regret_id) & is.na(er_socsupp), 0, er_socsupp),
+         er_accept = ifelse(!is.na(regret_id) & is.na(er_accept), 0, er_accept),
+         er_otherreg = ifelse(!is.na(regret_id) & is.na(er_otherreg), 0, er_otherreg)) |>
+  mutate(reverse_undo = ifelse(!is.na(regret_id) & is.na(reverse_undo), 0, reverse_undo),
+         reverse_makeup = ifelse(!is.na(regret_id) & is.na(reverse_makeup), 0, reverse_makeup),
+         reverse_plan = ifelse(!is.na(regret_id) & is.na(reverse_plan), 0, reverse_plan),
+         reverse_amends = ifelse(!is.na(regret_id) & is.na(reverse_amends), 0, reverse_amends)) |>
+  mutate(joy = ifelse(is.na(regret_id) & is.na(joy), 0, joy),
+         pride = ifelse(is.na(regret_id) & is.na(pride), 0, pride),
+         anxiety = ifelse(is.na(regret_id) & is.na(anxiety), 0, anxiety),
+         anger = ifelse(is.na(regret_id) & is.na(anger), 0, anger),
+         sadness = ifelse(is.na(regret_id) & is.na(sadness), 0, sadness),
+         contentment = ifelse(is.na(regret_id) & is.na(contentment), 0, contentment),
+         regret = ifelse(is.na(regret_id) & is.na(regret), 0, regret),
+         disappointment = ifelse(is.na(regret_id) & is.na(disappointment), 0, disappointment)) 
   
 readr::write_csv(df_ema_intake, "processed_merged.csv")
 ```
