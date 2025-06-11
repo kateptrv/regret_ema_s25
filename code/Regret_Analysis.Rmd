@@ -1,0 +1,107 @@
+---
+title: "git hub -- updated data"
+author: "nick madibekov"
+date: "2025-06-11"
+output: html_document
+---
+
+Load required packages:
+```{r load-raw, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(lubridate)
+library(qualtRics)
+library(tidyr)
+library(stringr)
+```
+
+Load and Clean Raw Data:
+```{r}
+data_raw <- read_survey("data_raw.csv")
+
+# Preview
+head(data_raw)
+
+# Remove tester PID entries
+data1 <- data_raw %>%
+  filter(!PID %in% c("111111", "0", "000000", "PID"))
+
+# Remove follow-up entries
+data2 <- data1 %>%
+  filter(
+    !coalesce(
+      str_detect(SURVEY_TYPE, regex("followup", ignore_case = TRUE)),
+      FALSE
+    )
+  )
+```
+
+Parse Time, Organize by Participant, Calculate Time Differences Between Pings:
+```{r}
+data2 <- data2 %>%
+  mutate(
+    date_time = ymd_hms(RecordedDate)
+  )
+
+# Add Ping number per participant
+data_time <- data2 %>%
+  group_by(PID) %>%
+  arrange(date_time) %>%
+  mutate(PING_NUM = row_number()) %>%
+  ungroup()
+
+# Time Differences
+data_time <- data_time %>%
+  group_by(PID) %>%
+  arrange(date_time) %>%
+  mutate(
+    td_secs = as.numeric(difftime(date_time, lag(date_time), units = "secs")),
+    time_diff = seconds_to_period(td_secs)
+  ) %>%
+  ungroup()
+```
+
+Mark Exclusions and Format Final Dataset:
+```{r}
+data_final <- data_time %>%
+  mutate(
+    SURVEY_TYPE = if_else(is.na(SURVEY_TYPE), "first", SURVEY_TYPE),
+    exclude     = NA_character_,
+    exclude     = if_else(td_secs < 600, "time", exclude)
+  ) %>%
+  select(
+    PID, DAY_NUM, PING_NUM,
+    decision, emo_event,
+    SURVEY_TYPE, time_diff,
+    exclude
+  )
+```
+
+Look, Write Cleaned Data to CSV 
+```{r}
+knitr::kable(
+  head(data_final),
+  caption = "Final dataset preview"
+)
+
+readr::write_csv(data_final, "semi_processed_data.csv")
+```
+
+Compare With Alternate Coder
+```{r compare-exclude}
+file1 <- read_csv("FINAL regret - Nick.csv")
+file2 <- read_csv("FINAL regret - Susie.csv")
+
+# Stop if row counts differ
+stopifnot(nrow(file1) == nrow(file2))
+
+exclude_differences <- bind_cols(file1, exclude_file2 = file2$exclude) %>%
+  mutate(mismatch = exclude != exclude_file2) %>%
+  filter(mismatch)
+
+knitr::kable(
+  head(exclude_differences),
+  caption = "Exclude Flag Mismatches"
+)
+
+write_csv(exclude_differences, "regret_mismatch.csv")
+```
