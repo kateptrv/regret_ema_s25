@@ -19,7 +19,7 @@ data <- read_csv("processed_merged.csv")
 ```
 
 ```{r}
-ggthemr(palette = "grape", type = "outer", line_weight = 0.5, text_size = 14, spacing = 2, layout = "clean")
+ggthemr(palette = "grape", type = "outer", line_weight = 0.5, text_size = 16, spacing = 2, layout = "clean")
 
 showtext_auto()
 showtext_opts(nseg = 5)
@@ -137,12 +137,17 @@ data |>
 data |>
   group_by(PID, regret_id) |>
   mutate(mean_intensity = mean(regret_intensity, na.rm = TRUE)) |>
-  mutate(pmc_intensity = mean_intensity - regret_intensity) |>
+  mutate(pmc_intensity = regret_intensity - mean_intensity) |>
   ungroup() |>
-  ggplot(aes(x = followup_id, y = pmc_intensity)) +
-  geom_point() +
+  group_by(PID, regret_id) |>
+  mutate(followup_percent = (followup_id - 1) / (max(followup_id, na.rm = TRUE) - 1)) |>
+  ungroup() |>
+  select(PID, regret_id, followup_id, pmc_intensity, followup_percent) |>
+  ungroup() |>
+  ggplot(aes(x = followup_percent, y = pmc_intensity)) +
+  geom_point(position = position_jitter(w = 0.025)) +
   geom_smooth(method = "lm") +
-  labs(x = "Follow-up ID", y = "Regret intensity (PMC)") +
+  labs(x = "Time from event onset to resolution", y = "Regret intensity") +
   stat_cor(method = "pearson")
 ```
 
@@ -159,9 +164,24 @@ data |>
   select(-(er_otherreg_text)) |>
   pivot_longer(cols = starts_with("er_"), names_to = "strategy", values_to = "value") |>
   filter(!is.na(regret_id)) |>
-  ggplot(aes(x = value == 1, fill = strategy)) +
+  filter(value == 1) |>
+  mutate(strategy = case_when(
+  strategy == "er_accept" ~ "acceptance",
+  strategy == "er_distract" ~ "distraction",
+  strategy == "er_otherreg" ~ "other",
+  strategy == "er_pleasure" ~ "pleasure-seeking",
+  strategy == "er_reapp" ~ "reappraisal",
+  strategy == "er_sitmod" ~ "situation-modification",
+  strategy == "er_socsupp" ~ "social support"
+)) |>
+  ggplot(aes(x = strategy, fill = strategy)) +
   geom_bar(position = "dodge") +
-  labs(x = "Strategy used", y = "Count") 
+  labs(x = "Strategy", y = "Count (N = 1,517 pings)") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme(legend.position = "none") +
+  coord_flip()
+  
+ggsave(filename = "figures/fig1_ema.pdf", device = pdf, width = 8.27, height = 5.83, units = "in", useDingbats = TRUE, dpi = 72)
   
 ```
 
