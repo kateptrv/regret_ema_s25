@@ -8,6 +8,10 @@ library(readr)
 library(stringr)
 library(qualtRics)
 library(zoo)
+library(ggplot2)
+
+ema <- readr::read_csv("data/regret_ema.csv")
+intake <- readr::read_csv("data/regret_ema_intake.csv")
 ```
 
 ```{r}
@@ -190,6 +194,35 @@ readr::write_csv(df_ema_intake, "processed_merged.csv")
 # For participant crediting
 
 ```{r}
+<<<<<<< HEAD
+=======
+<<<<<<< Updated upstream
+distinct_events <- df_ema_intake %>%
+  filter(!is.na(regret_index)) %>%
+  group_by(PID, regret_index) %>%
+  summarise(followups = n(), .groups = "drop") # to get one row per ping
+
+event_summary_pid <- distinct_events %>%
+  group_by(PID) %>% 
+  summarise(num_events = n(), avg_followups = mean(followups), sd_followups = sd(followups), min_followups = min(followups), max_followups = max(followups))
+print(event_summary_pid)
+
+event_summary_overall <- event_summary_pid %>%
+  summarise(
+    M_events = mean(num_events),
+    SD_events = sd(num_events),
+    min_events = min(num_events),
+    max_events = max(num_events),
+    M_followups = mean(avg_followups),
+    SD_followups = sd(avg_followups),
+    min_followups = min(min_followups),
+    max_followups = max(max_followups)
+  )
+print(event_summary_overall)
+
+#Na's due to only one event? 
+=======
+>>>>>>> 4ca1dbd (for 07/08)
 df_ema_intake |>
   mutate(Date = ymd_hms(StartDate)) |>
   filter(Date <= "2025-5-24") |>
@@ -197,6 +230,7 @@ df_ema_intake |>
   summarise(num_pings = n()) |>
   arrange(PID)
   
+<<<<<<< HEAD
 ```
 
 # Session info
@@ -205,4 +239,541 @@ df_ema_intake |>
 sessionInfo() %>%
   capture.output(file = "processing_session_info.txt")
 
+=======
+>>>>>>> 4ca1dbd (for 07/08)
+```
+
+# Session info
+
+```{r}
+sessionInfo() %>%
+  capture.output(file = "processing_session_info.txt")
+>>>>>>> Stashed changes
+```
+
+# Suze finding episode durations 
+```{r}
+df <- read_csv("processed_merged.csv")
+df_ema_merged <- read_csv("processed_merged.csv")
+read_csv("data/regret_ema.csv")
+df_raw <- read_csv("data/regret_ema.csv")
+
+df_raw_ordered <- df_raw %>%
+  filter(!is.na(RecordedDate)) %>%
+  select(-StartDate) %>%
+  arrange(PID, decision, RecordedDate) %>%
+  group_by(PID, decision) %>%
+  mutate(row_num = row_number()) %>%
+  ungroup()
+df_ema_ordered <- df_ema_merged %>%
+  select(PID, decision, regret_id, followup_id, everything()) %>% #moving columns to the front
+  arrange(PID, decision, followup_id) %>% #arranging responses in order
+  group_by(PID, decision) %>%
+  mutate(row_num = row_number()) %>%
+  ungroup()
+
+df_raw_ordered <- df_raw_ordered %>%
+  rename(recorded_date_raw = RecordedDate)
+
+df_ema_merged <- df_ema_ordered %>%
+  left_join(
+    df_raw_ordered %>% select(PID, decision, row_num, recorded_date_raw),
+    by = c("PID", "decision", "row_num")
+  ) %>%
+  mutate(recorded_date = ymd_hms(recorded_date_raw)) %>%
+  select(-recorded_date_raw) %>%
+  relocate(recorded_date, .after = PID)       #merging recordeddate from row s    
+
+#calculating regret_duration and adding it to df_ema_merged
+df_regret_ids_keep <- df_ema_merged %>% # identifying and keeping regret_ids with follow ups (df_ema_followups)
+   group_by(PID, regret_id) %>%
+  filter(any(followup_id >= 2)) %>%
+  ungroup() %>%
+  distinct(PID, regret_id)
+df_ema_followups <- df_ema_merged %>%
+  semi_join(df_regret_ids_keep, by = c("PID", "regret_id"))   # keeping only rows from df_regret_ids_keep in df_ema_merged without adding anything from df_regret_ids_keep. I've never used semijoin before so I hope this makes sense 
+
+df_regret_durations_all <- df_ema_merged %>% #durations of episodes in minutes for all episodes 
+  filter(!is.na(regret_id)) %>%
+  group_by(PID, regret_id) %>%
+  summarise(
+    regret_duration = as.numeric(interval(min(recorded_date), max(recorded_date)) / minutes(1)),
+    .groups = "drop"
+  )
+
+df_regret_durations_gte2 <- df_regret_durations_all %>% #durations of episodes in minutes for those with followups 
+  semi_join(
+    df_ema_merged %>%
+      filter(!is.na(regret_id), followup_id > 1) %>%
+      distinct(PID, regret_id),
+    by = c("PID", "regret_id")
+  )
+ # gte2 (greater than or equal to 2)
+```
+
+# Suze - plotting/descriptive variables (All episodes)
+```{r}
+ggplot(df_regret_durations_all, aes(x = regret_duration)) +
+  geom_histogram(binwidth = 600, fill = "lightblue", color = "black") +
+  geom_vline(
+    aes(xintercept = mean(regret_duration, na.rm = TRUE)),
+    color = "red", linetype = "dashed", linewidth = 1
+  ) +
+  labs(
+    title = "Regret Duration - All Episodes",
+    x = "Duration (minutes)", y = "Count"
+  ) +
+  theme_minimal()
+
+df_regret_durations_all_stats <- df_regret_durations_all %>%
+  summarise(
+    n = sum(!is.na(regret_duration)),
+    mean = mean(regret_duration, na.rm = TRUE),
+    median = median(regret_duration, na.rm = TRUE),
+    sd = sd(regret_duration, na.rm = TRUE),
+    min = min(regret_duration, na.rm = TRUE),
+    max = max(regret_duration, na.rm = TRUE),
+    iqr = IQR(regret_duration, na.rm = TRUE)
+  )
+print(df_regret_durations_all_stats)
+```
+
+# Suze - plotting / descriptive variables (Only episodes with follow-ups)
+```{r}
+ggplot(df_regret_durations_gte2, aes(x = regret_duration)) +
+  geom_histogram(binwidth = 600, fill = "lightgreen", color = "black") +
+  geom_vline(
+    aes(xintercept = mean(regret_duration, na.rm = TRUE)),
+    color = "red", linetype = "dashed", linewidth = 1
+  ) +
+  labs(
+    title = "Regret Duration - With Follow-ups Only",
+    x = "Duration (minutes)", y = "Count"
+  ) +
+  theme_minimal()
+
+df_regret_durations_gte2_stats <- df_regret_durations_gte2 %>%
+  summarise(
+    n = sum(!is.na(regret_duration)),
+    mean = mean(regret_duration, na.rm = TRUE),
+    median = median(regret_duration, na.rm = TRUE),
+    sd = sd(regret_duration, na.rm = TRUE),
+    min = min(regret_duration, na.rm = TRUE),
+    max = max(regret_duration, na.rm = TRUE),
+    iqr = IQR(regret_duration, na.rm = TRUE)
+  )
+print(df_regret_durations_gte2_stats)
+```
+
+# Intensity as date vs time
+```{r}
+
+# grouping PID and regret_id and arranging by recorded date (I realized after this did not make sense because it is straight plotting evertyhing with no connection between PIDs, regret episodes, etc)
+df_ema_followups_ordered <- df_ema_followups %>%
+  arrange(PID, regret_id, recorded_date) %>%
+  group_by(PID, regret_id) %>%
+  mutate(time = row_number()) %>%
+  ungroup()
+# ggplot(df_ema_followups_ordered, aes(x = time, y = regret_intensity)) +
+#   geom_point(alpha = 0.3) +
+#   labs(
+#     title = "Regret Intensity Over Time",
+#     x = "Follow-up Time Point",
+#     y = "Regret Intensity"
+#   ) +
+#   theme_minimal()
+# df_clean_followups <- df_ema_followups_ordered %>%
+#   filter(!is.na(regret_intensity), !is.na(time))
+df_summary_followups <- df_clean_followups %>%
+  group_by(time) %>%
+  summarise(
+    mean_intensity = mean(regret_intensity, na.rm = TRUE),
+    sd = sd(regret_intensity, na.rm = TRUE),
+    n = n(),
+    se = sd / sqrt(n)
+   )
+# ggplot(df_summary_followups, aes(x = time, y = mean_intensity)) +
+#   geom_line(color = "blue") +
+#   geom_point(size = 2) +
+#   geom_errorbar(aes(ymin = mean_intensity - se, ymax = mean_intensity + se), width = 0.1) +
+#   labs(
+#     title = "Average Intensity by Follow-up Time Point",
+#     x = "Follow-up Time Point",
+#     y = "Avg Regret Intensity"
+#   ) +
+#   theme_minimal()
+
+# Grouping data by PID and average regret intnesity over time across their episodes
+df_participant_avg <- df_ema_followups_ordered %>%
+  filter(!is.na(regret_intensity)) %>%
+  group_by(PID, time) %>%
+  summarise(
+    mean_intensity = mean(regret_intensity, na.rm = TRUE),
+    .groups = "drop"
+  )
+ggplot(df_participant_avg, aes(
+  x = time,
+  y = mean_intensity,
+  group = PID,
+  color = PID
+)) +
+  geom_line(alpha = 0.7) +
+  labs(
+    title = "Average Regret Intensity Over Time (by PID)",
+    x = "Follow-up Time Point",
+    y = "Avg Regret Intensity"
+  ) +
+  theme_minimal()
+
+
+#By a function of actual time and not just from ping to ping
+df_ema_followups_time <- df_ema_followups %>%
+  filter(!is.na(regret_intensity), !is.na(recorded_date)) %>%
+  group_by(PID, regret_id) %>%
+  mutate(
+   minutes_since_start = as.numeric(difftime(recorded_date, min(recorded_date), units = "mins"))
+  ) %>%
+  ungroup()
+df_time_avg <- df_ema_followups_time %>%
+  mutate(time_bin = cut(minutes_since_start, breaks = seq(0, max(minutes_since_start, na.rm = TRUE), by = 120))) %>%  # bin every 2 hours, or adjust
+  group_by(PID, time_bin) %>%
+  summarise(
+    mean_intensity = mean(regret_intensity, na.rm = TRUE),
+    avg_time = mean(minutes_since_start, na.rm = TRUE),
+    .groups = "drop"
+  )
+ggplot(df_time_avg, aes(x = avg_time, y = mean_intensity, group = PID, color = PID)) +
+  geom_line(alpha = 0.7) +
+  labs(
+    title = "Average Regret Intensity By Minutes (by PID)",
+    x = "Minutes Since Episode Start",
+    y = "Avg Regret Intensity"
+  ) +
+  theme_minimal()
+
+# ggplot(df_ema_followups_time, aes(x = minutes_since_start, y = regret_intensity)) +
+#   geom_point(alpha = 0.3) +
+#   labs(
+#     title = "Regret Intensity Over Time (Minutes)",
+#     x = "Minutes Since Regret Start",
+#     y = "Regret Intensity"
+#   ) +
+#   theme_minimal()
+
+# CHANGE IN INENSITY COMPARED TO TIME BETWEEN PINGS WEEWOO WEEWOO 
+df <- df_ema_followups %>%
+  arrange(PID, regret_id, recorded_date) %>%
+  group_by(PID, regret_id) %>%
+  mutate(
+    minutes_since_last = interval(lag(recorded_date), recorded_date) / minutes(1),
+    intensity_change = regret_intensity - lag(regret_intensity)
+  ) %>%
+  ungroup()
+ggplot(df, aes(x = minutes_since_last, y = intensity_change)) +
+  geom_point(alpha = 0.2) +
+  labs(title = "Change in Intensity vs. Time between Pings",
+       x = "Minutes Since Last Ping", y = "Change in Intensity") +
+  theme_minimal()
+# CHANGE IN INENSITY COMPARED TO TIME BETWEEN PINGS WEEWOO WEEWOO - grouping by PID for same reasons as before ^
+df_summary_by_pid <- df %>%
+  filter(!is.na(minutes_since_last), !is.na(intensity_change)) %>%
+  group_by(PID) %>%
+  summarise(
+    avg_minutes = mean(minutes_since_last, na.rm = TRUE),
+    avg_change = mean(intensity_change, na.rm = TRUE)
+  )
+ggplot(df_summary_by_pid, aes(x = avg_minutes, y = avg_change)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  labs(title = "Avg Intensity Change vs. Time Between Pings (by PID)",
+       x = "Avg Time Between Pings (min)", y = "Avg Intensity Change") +
+  theme_minimal()
+
+
+# going by PID across time (not average time between pings and average intensity change like above)
+df_participant_summary <- df_ema_followups %>%
+  filter(!is.na(recorded_date), !is.na(regret_intensity)) %>%
+  group_by(PID) %>%
+  mutate(
+    minutes_since_start = as.numeric(difftime(recorded_date, min(recorded_date), units = "mins"))
+  ) %>%
+  group_by(PID, minutes_since_start) %>%
+  summarise(mean_intensity = mean(regret_intensity), .groups = "drop")
+
+ggplot(df_participant_summary, aes(x = minutes_since_start, y = mean_intensity, color = PID)) +
+  geom_line(alpha = 0.6) +
+  labs(
+    title = "Avg Regret Intensity Over Time by Participant",
+    x = "Minutes Since First Ping",
+    y = "Avg Intensity"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none") 
+  
+```
+
+# Intensity vs time
+```{r}
+df_ordered <- df_ema_followups %>%
+  filter(!is.na(regret_intensity), !is.na(recorded_date)) %>%
+  arrange(PID, regret_id, recorded_date) %>%
+  group_by(PID, regret_id) %>%
+  mutate(
+    time_diff_mins = as.numeric(interval(lag(recorded_date), recorded_date) / minutes(1)),
+    intensity_change = regret_intensity - lag(regret_intensity) #finding time between pings
+  ) %>%
+  ungroup()
+df_binned <- df_ordered %>% #500 minute chunks. arbitrary
+  mutate(time_bin = cut(time_diff_mins, breaks = seq(0, max(time_diff_mins, na.rm = TRUE), by = 500))) %>%
+  group_by(time_bin) %>%
+  summarise(
+    avg_time = mean(time_diff_mins, na.rm = TRUE),
+    mean_change = mean(intensity_change, na.rm = TRUE),
+    n = n()
+  )
+# using recorded date to get minutes since the previous ping and reported change in intensity since that ping
+ggplot() +
+  geom_point(data = df_ordered, aes(x = time_diff_mins, y = intensity_change), alpha = 0.2) +
+  geom_line(data = df_binned, aes(x = avg_time, y = mean_change), color = "violet", size = 1) +
+  labs(
+    title = "Average Change in Intensity vs. Time Between Follow-ups",
+    x = "Time Between Pings (minutes)",
+    y = "Avg Change in Intensity"
+  ) +
+  theme_minimal()
+
+# doing it again but by PID (?)
+df_ordered <- df_ema_followups %>%
+  filter(!is.na(regret_intensity), !is.na(recorded_date)) %>%
+  arrange(PID, regret_id, recorded_date) %>%
+  group_by(PID, regret_id) %>%
+  mutate(
+    time_diff_mins = as.numeric(interval(lag(recorded_date), recorded_date) / minutes(1)),
+    intensity_change = regret_intensity - lag(regret_intensity)
+  ) %>%
+  ungroup()
+df_binned_participant <- df_ordered %>%
+  mutate(time_bin = cut(time_diff_mins, breaks = seq(0, max(time_diff_mins, na.rm = TRUE), by = 500))) %>%
+  filter(!is.na(time_bin)) %>%
+  group_by(PID, time_bin) %>%
+  summarise(
+    mean_change_pid = mean(intensity_change, na.rm = TRUE),
+    avg_time = mean(time_diff_mins, na.rm = TRUE),
+    .groups = "drop"
+  )
+df_binned_avg <- df_binned_participant %>% #avg across participants per bin
+  group_by(time_bin) %>%
+  summarise(
+    avg_time = mean(avg_time, na.rm = TRUE),
+    mean_change = mean(mean_change_pid, na.rm = TRUE),
+    se = sd(mean_change_pid, na.rm = TRUE) / sqrt(n())
+  )
+ggplot() +
+  geom_point(data = df_ordered, aes(x = time_diff_mins, y = intensity_change), alpha = 0.1) +
+  geom_line(data = df_binned_avg, aes(x = avg_time, y = mean_change), color = "lightblue", size = 1.2) +
+  geom_errorbar(data = df_binned_avg,
+                aes(x = avg_time, ymin = mean_change - se, ymax = mean_change + se),
+                width = 100, alpha = 0.4) +
+  labs(
+    title = "Avg Change in Intensity vs. Time Between Follow-ups (by PID)",
+    x = "Time Between Pings (minutes)",
+    y = "Mean Change in Intensity"
+  ) +
+  theme_minimal()
+```
+
+# Rumination vs time
+```{r}
+
+df_ordered_rum <- df_ema_followups %>%
+  filter(!is.na(rumination), !is.na(recorded_date)) %>%
+  arrange(PID, regret_id, recorded_date) %>%
+  group_by(PID, regret_id) %>%
+  mutate(
+    time_diff_mins = as.numeric(difftime(recorded_date, lag(recorded_date), units = "mins")),
+    rumination_change = rumination - lag(rumination)
+  ) %>%
+  ungroup() 
+
+df_binned_rum <- df_ordered_rum %>%
+  mutate(time_bin = cut(time_diff_mins, breaks = seq(0, max(time_diff_mins, na.rm = TRUE), by = 500))) %>%
+  group_by(time_bin) %>%
+  summarise(
+    avg_time = mean(time_diff_mins, na.rm = TRUE),
+    mean_change = mean(rumination_change, na.rm = TRUE),
+    n = n())
+# using recorded date to get minutes since the previous ping and reported change in intensity since that ping
+
+ggplot() +
+  geom_point(data = df_ordered_rum, aes(x = time_diff_mins, y = rumination_change), alpha = 0.2) +
+  geom_line(data = df_binned_rum, aes(x = avg_time, y = mean_change), color = "aquamarine", size = 1) +
+  labs(
+    title = "Avg Change in Rumination vs. Time Between Follow-ups",
+    x = "Time Between Pings (minutes)",
+    y = "Avg Change in Rumination"
+  ) +
+  theme_minimal()
+
+# By PID
+df_ordered_rum <- df_ema_followups %>%
+  filter(!is.na(rumination), !is.na(recorded_date)) %>%
+  arrange(PID, regret_id, recorded_date) %>%
+  group_by(PID, regret_id) %>%
+  mutate(
+    time_diff_mins = as.numeric(interval(lag(recorded_date), recorded_date) / minutes(1)),
+    rumination_change = rumination - lag(rumination)
+  ) %>%
+  ungroup()
+df_binned_rum_pid <- df_ordered_rum %>%
+  mutate(time_bin = cut(time_diff_mins, breaks = seq(0, max(time_diff_mins, na.rm = TRUE), by = 500))) %>%
+  filter(!is.na(time_bin)) %>%
+  group_by(PID, time_bin) %>%
+  summarise(
+    mean_change_pid = mean(rumination_change, na.rm = TRUE),
+    avg_time = mean(time_diff_mins, na.rm = TRUE),
+    .groups = "drop"
+  )
+df_binned_rum_avg <- df_binned_rum_pid %>%
+  group_by(time_bin) %>%
+  summarise(
+    avg_time = mean(avg_time, na.rm = TRUE),
+    mean_change = mean(mean_change_pid, na.rm = TRUE),
+    se = sd(mean_change_pid, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  )
+ggplot() +
+  geom_point(data = df_ordered_rum, aes(x = time_diff_mins, y = rumination_change), alpha = 0.1) +
+  geom_line(data = df_binned_rum_avg, aes(x = avg_time, y = mean_change), color = "green", size = 1.2) +
+  geom_errorbar(
+    data = df_binned_rum_avg,
+    aes(x = avg_time, ymin = mean_change - se, ymax = mean_change + se),
+    width = 100,
+    alpha = 0.4
+  ) +
+  labs(
+    title = "Avg Change in Rumination vs. Time Between Pings (by PID)",
+    x = "Time Between Pings (minutes)",
+    y = "Avg Change in Rumination"
+  ) +
+  theme_minimal()
+```
+
+# Average intensity and duration 
+```{r}
+# df_regret_durations <- df_ema_followups %>%
+#   group_by(PID, regret_id) %>%
+#   summarise(
+#     regret_duration = as.numeric(interval(min(recorded_date), max(recorded_date)) / minutes(1)),
+#     .groups = "drop"
+#   )
+# df_ema_followups <- df_ema_followups %>%
+#   left_join(df_regret_durations, by = c("PID", "regret_id"))
+# 
+# df_regret_summary <- df_ema_followups %>%
+#   group_by(PID, regret_id) %>%
+#   summarise(
+#     avg_intensity = mean(regret_intensity, na.rm = TRUE),
+#     regret_duration = max(regret_duration, na.rm = TRUE),
+#     .groups = "drop"
+#   )
+# 
+# 
+# ggplot(df_regret_summary, aes(x = regret_duration, y = avg_intensity)) +
+#   geom_point(color = "darkblue", alpha = 0.6) +
+#   geom_smooth(method = "lm", se = TRUE, color = "red", linetype = "dashed") +
+#   labs(
+#     title = "Avg Intensity vs. Regret Duration",
+#     x = "Duration (minutes)",
+#     y = "Average Intensity"
+#   ) +
+#   theme_minimal()
+
+
+df_avg_intensity <- df_ema_merged %>%
+  filter(!is.na(regret_id), !is.na(regret_intensity)) %>%
+  group_by(PID, regret_id) %>%
+  summarise(avg_intensity = mean(regret_intensity, na.rm = TRUE), .groups = "drop")
+
+df_intensity_vs_duration <- df_avg_intensity %>%
+  inner_join(df_regret_durations_all, by = c("PID", "regret_id"))
+
+ggplot(df_intensity_vs_duration, aes(x = regret_duration, y = avg_intensity)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", color = "red", se = TRUE) +
+  labs(title = "Avg. Intensity vs. Duration of Episode",
+       x = "Duration (minutes)",
+       y = "Avg. Intensity") +
+  theme_minimal()
+
+ cor.test(df_intensity_vs_duration$regret_duration, df_intensity_vs_duration$avg_intensity, use = "complete.obs", method = "pearson")
+```
+
+
+# Effectiveness of regulation
+Attempts on average per regret episode
+```{r}
+df_polyreg <- df_ema_merged %>%
+  filter(!is.na(regret_id)) %>%
+  rowwise() %>%
+  mutate(total_reg_attempts = sum(c_across(er_reapp:er_otherreg), na.rm = TRUE)) %>% #all regulation strategies
+  ungroup() %>%
+  group_by(PID, regret_id) %>% #by episode
+  summarise(
+    polyregulation_episode = sum(total_reg_attempts, na.rm = TRUE) / max(followup_id, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+# Polyregulation and avg intensity, rumination, duration 
+```{r}
+df_intensity_rum <- df_ema_merged %>%
+  filter(!is.na(regret_id)) %>%
+  group_by(PID, regret_id) %>%
+  summarise(avg_intensity = mean(regret_intensity, na.rm = TRUE),
+            avg_rumination = mean(rumination, na.rm = TRUE),
+            .groups = "drop")
+
+df_polyreg <- df_polyreg %>%
+  left_join(df_intensity_rum, by = c("PID", "regret_id")) %>%
+  left_join(df_regret_durations_all, by = c("PID", "regret_id"))
+
+cor_results <- list(
+  polyreg_vs_intensity = cor.test(df_polyreg_merged$polyregulation_episode, df_polyreg_merged$avg_intensity),
+  polyreg_vs_rumination = cor.test(df_polyreg_merged$polyregulation_episode, df_polyreg_merged$avg_rumination),
+  polyreg_vs_duration = cor.test(df_polyreg_merged$polyregulation_episode, df_polyreg_merged$regret_duration)
+)
+cor_results$polyreg_vs_intensity
+cor_results$polyreg_vs_rumination
+cor_results$polyreg_vs_duration
+
+
+ggplot(df_polyreg, aes(x = polyregulation_episode, y = avg_intensity)) +
+  geom_point(alpha = 0.4, color = "steelblue") +
+  geom_smooth(method = "lm", color = "red") +
+  labs(
+    title = "Polyregulation vs. Avg Intensity",
+    x = "Polyregulation per Episode",
+    y = "Average Intensity"
+  ) +
+  theme_minimal()
+
+ggplot(df_polyreg, aes(x = polyregulation_episode, y = avg_rumination)) +
+  geom_point(alpha = 0.4, color = "lightgreen") +
+  geom_smooth(method = "lm", color = "red") +
+  labs(
+    title = "Polyregulation vs. Average Rumination",
+    x = "Polyregulation per Episode",
+    y = "Average Rumination"
+  ) +
+  theme_minimal()
+
+ggplot(df_polyreg_merged, aes(x = polyregulation_episode, y = regret_duration)) +
+  geom_point(alpha = 0.4, color = "pink") +
+  geom_smooth(method = "lm", color = "red") +
+  labs(
+    title = "Polyregulation vs. Regret Duration",
+    x = "Polyregulation per Episode",
+    y = "Regret Duration (minutes)"
+  ) +
+  theme_minimal()
 ```
