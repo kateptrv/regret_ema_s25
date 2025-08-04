@@ -107,6 +107,18 @@ data |>
 ## Correlations
 
 ```{r}
+
+```
+
+
+```{r}
+model_1 <- lmer(rumination ~ regret_intensity + (1 | PID), data = data)
+tab_model(model_1)
+plot_model(model_1)
+```
+
+
+```{r}
 data |>
   filter(!is.na(regret_id)) |>
   ggplot(aes(x = followup_id, y = rumination)) +
@@ -129,7 +141,60 @@ data |>
   
 ```
 
+
 ```{r}
+cor(data$regret_intensity, data$rumination, use = "pairwise.complete.obs", method = "pearson")
+
+model1_lm <- lm(rumination ~ regret_intensity, data = data) 
+# standardized beta
+summary(model1_lm)
+lm.beta(model1_lm)
+tab_model(model1_lm)
+
+data |>
+  mutate(intensity_std = sd(regret_intensity, na.rm = TRUE)) 
+```
+
+```{r}
+lm.beta.lmer <- function(mod) {
+   b <- fixef(mod)[-1]
+   sd.x <- apply(getME(mod,"X")[,-1],2,sd)
+   sd.y <- sd(getME(mod,"y"))
+   b*sd.x/sd.y
+}
+
+data |>
+  group_by(PID) |>
+  mutate(mean_regret_intensity = mean(regret_intensity, na.rm = TRUE)) |>
+  ungroup() |>
+  mutate(regret_intensity_pmc = regret_intensity - mean_regret_intensity) 
+model1 <- lmer(rumination ~ scale(regret_intensity) + (1 | PID), data = data)
+tab_model(model1)
+
+ggthemr_reset()
+data |>
+  ggplot(aes(x = scale(regret_intensity), y = rumination, group = PID)) +
+  #geom_point(position = position_jitter(h = 0.2)) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Regret intensity (PMC)", y = "Rumination") +
+# remove legends
+  theme(legend.position = "none")
+```
+
+```{r}
+tab_model(lmer(reverse_undo ~ scale(regret_intensity) + (1 + regret_intensity | PID), data = data))
+data |>
+  ggplot(aes(x = scale(regret_intensity), y = reverse_undo, group = PID)) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Regret intensity", y = "Reverse undo") 
+```
+
+```{r}
+tab_model(lmer(regret_intensity ~ lag(er_reapp) + (1 | PID), data = data))
+data |> 
+  ggplot(aes(x = lag(er_reapp), y = regret_intensity)) +
+  stat_smooth(method = "lm", se = FALSE, aes(group = PID)) +
+  stat_smooth(method = "lm", se = FALSE, color = "black")
 ```
 
 
