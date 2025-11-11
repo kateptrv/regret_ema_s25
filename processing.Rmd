@@ -194,9 +194,7 @@ readr::write_csv(df_ema_intake, "processed_merged.csv")
 # For participant crediting
 
 ```{r}
-<<<<<<< HEAD
-=======
-<<<<<<< Updated upstream
+
 distinct_events <- df_ema_intake %>%
   filter(!is.na(regret_index)) %>%
   group_by(PID, regret_index) %>%
@@ -221,8 +219,7 @@ event_summary_overall <- event_summary_pid %>%
 print(event_summary_overall)
 
 #Na's due to only one event? 
-=======
->>>>>>> 4ca1dbd (for 07/08)
+
 df_ema_intake |>
   mutate(Date = ymd_hms(StartDate)) |>
   filter(Date <= "2025-5-24") |>
@@ -230,7 +227,7 @@ df_ema_intake |>
   summarise(num_pings = n()) |>
   arrange(PID)
   
-<<<<<<< HEAD
+
 ```
 
 # Session info
@@ -239,8 +236,6 @@ df_ema_intake |>
 sessionInfo() %>%
   capture.output(file = "processing_session_info.txt")
 
-=======
->>>>>>> 4ca1dbd (for 07/08)
 ```
 
 # Session info
@@ -248,7 +243,7 @@ sessionInfo() %>%
 ```{r}
 sessionInfo() %>%
   capture.output(file = "processing_session_info.txt")
->>>>>>> Stashed changes
+
 ```
 
 # Suze finding episode durations 
@@ -365,15 +360,12 @@ df_regret_durations_gte2_stats <- df_regret_durations_gte2 %>%
 print(df_regret_durations_gte2_stats)
 ```
 
-# Intensity as date vs time
+# Suze Intensity as date vs time
 ```{r}
 
 # grouping PID and regret_id and arranging by recorded date (I realized after this did not make sense because it is straight plotting evertyhing with no connection between PIDs, regret episodes, etc)
-df_ema_followups_ordered <- df_ema_followups %>%
-  arrange(PID, regret_id, recorded_date) %>%
-  group_by(PID, regret_id) %>%
-  mutate(time = row_number()) %>%
-  ungroup()
+ 
+
 # ggplot(df_ema_followups_ordered, aes(x = time, y = regret_intensity)) +
 #   geom_point(alpha = 0.3) +
 #   labs(
@@ -403,7 +395,7 @@ df_summary_followups <- df_clean_followups %>%
 #   ) +
 #   theme_minimal()
 
-# Grouping data by PID and average regret intnesity over time across their episodes
+# Grouping data by PID and average regret intensity over time across their episodes
 df_participant_avg <- df_ema_followups_ordered %>%
   filter(!is.na(regret_intensity)) %>%
   group_by(PID, time) %>%
@@ -425,6 +417,7 @@ ggplot(df_participant_avg, aes(
   ) +
   theme_minimal()
 
+#try selecting smaller # at a time and facet wrap
 
 #By a function of actual time and not just from ping to ping
 df_ema_followups_time <- df_ema_followups %>%
@@ -484,7 +477,7 @@ df_summary_by_pid <- df %>%
   )
 ggplot(df_summary_by_pid, aes(x = avg_minutes, y = avg_change)) +
   geom_point() +
-  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
   labs(title = "Avg Intensity Change vs. Time Between Pings (by PID)",
        x = "Avg Time Between Pings (min)", y = "Avg Intensity Change") +
   theme_minimal()
@@ -512,7 +505,7 @@ ggplot(df_participant_summary, aes(x = minutes_since_start, y = mean_intensity, 
   
 ```
 
-# Intensity vs time
+# Suze Intensity vs time
 ```{r}
 df_ordered <- df_ema_followups %>%
   filter(!is.na(regret_intensity), !is.na(recorded_date)) %>%
@@ -582,7 +575,7 @@ ggplot() +
   theme_minimal()
 ```
 
-# Rumination vs time
+# Suze Rumination vs time
 ```{r}
 
 df_ordered_rum <- df_ema_followups %>%
@@ -658,7 +651,7 @@ ggplot() +
   theme_minimal()
 ```
 
-# Average intensity and duration 
+# Suze Average intensity and duration 
 ```{r}
 # df_regret_durations <- df_ema_followups %>%
 #   group_by(PID, regret_id) %>%
@@ -692,6 +685,8 @@ ggplot() +
 df_avg_intensity <- df_ema_merged %>%
   filter(!is.na(regret_id), !is.na(regret_intensity)) %>%
   group_by(PID, regret_id) %>%
+  mutate(max_followup = max(followup_id, na.rm = TRUE)) %>%
+  filter(max_followup > 1) %>%
   summarise(avg_intensity = mean(regret_intensity, na.rm = TRUE), .groups = "drop")
 
 df_intensity_vs_duration <- df_avg_intensity %>%
@@ -709,7 +704,7 @@ ggplot(df_intensity_vs_duration, aes(x = regret_duration, y = avg_intensity)) +
 ```
 
 
-# Effectiveness of regulation
+# Suze Effectiveness of regulation
 Attempts on average per regret episode
 ```{r}
 df_polyreg <- df_ema_merged %>%
@@ -722,9 +717,26 @@ df_polyreg <- df_ema_merged %>%
     polyregulation_episode = sum(total_reg_attempts, na.rm = TRUE) / max(followup_id, na.rm = TRUE),
     .groups = "drop"
   )
+
+
+df_polyreg <- df_ema_merged %>%
+  filter(!is.na(regret_id)) %>%
+  group_by(regret_id) %>%
+  mutate(max_followup = max(followup_id, na.rm = TRUE)) %>%
+  ungroup() %>%
+  rowwise() %>%
+  mutate(total_reg_attempts = sum(c_across(er_reapp:er_otherreg), na.rm = TRUE)) %>% #all regulation strategies
+  ungroup() %>%
+  group_by(PID, regret_id) %>% #by episode
+  summarise(
+    polyregulation_episode = sum(total_reg_attempts, na.rm = TRUE) / max(followup_id, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#
 ```
 
-# Polyregulation and avg intensity, rumination, duration 
+# Suze Polyregulation and avg intensity, rumination, duration 
 ```{r}
 df_intensity_rum <- df_ema_merged %>%
   filter(!is.na(regret_id)) %>%
@@ -776,4 +788,194 @@ ggplot(df_polyreg_merged, aes(x = polyregulation_episode, y = regret_duration)) 
     y = "Regret Duration (minutes)"
   ) +
   theme_minimal()
+```
+
+#Suze - from 07/09 meeting
+Plotting strategy (y/n) vs intensity change
+```{r}
+# regulation attempts at n = 1 vs regret change at time n = 2. 
+df_reg_strats <- df_ema_followups %>%
+  arrange(PID, regret_id, recorded_date) %>%
+  group_by(PID, regret_id) %>% #within each episode per person
+  mutate(
+    regulation_yn = if_else(rowSums(across(er_reapp:er_otherreg), na.rm = TRUE) > 0, 1, 0),  #new vaiable
+    regret_change = regret_intensity - lag(regret_intensity),
+    regulation_previous = lag(regulation_yn)
+  ) %>% #shift regulation down by one row to measure change since n-1
+  ungroup()
+
+
+df_bar <- df_reg_strats %>%
+  filter(!is.na(regulation_previous), !is.na(regret_change)) %>%
+  group_by(regulation_previous) %>%
+  summarise(
+    mean_change = mean(regret_change, na.rm = TRUE),
+    se = sd(regret_change, na.rm = TRUE) / sqrt(n()),
+    n = n()
+  )
+ggplot(df_bar, aes(x = factor(regulation_previous), y = mean_change)) +
+  geom_bar(stat = "identity", fill = "lightgreen") +
+  geom_errorbar(aes(ymin = mean_change - se, ymax = mean_change + se), width = 0.2) +
+  labs(
+    title = "Average Change in Regret Intensity vs Regulation Y/N",
+    x = "Regulation Used at Previous Ping (0 = No, 1 = Yes)",
+    y = "Average Change in Regret Intensity"
+  ) +
+  theme_minimal()
+```
+
+# Suze plotting per strategy vs intensity change (minus er_otherreg_text)
+```{r}
+
+df_reg_strats <- df_reg_strats %>%
+  mutate(
+   df_reg_strats <- df_reg_strats %>%
+  mutate(
+    er_reapp = ifelse(!is.na(er_reapp) & er_reapp == 1, 1, 0),
+    er_pleasure = ifelse(!is.na(er_pleasure) & er_pleasure == 1, 1, 0),
+    er_distract = ifelse(!is.na(er_distract) & er_distract == 1, 1, 0),
+    er_sitmod = ifelse(!is.na(er_sitmod) & er_sitmod == 1, 1, 0),
+    er_socsupp = ifelse(!is.na(er_socsupp) & er_socsupp == 1, 1, 0),
+    er_accept = ifelse(!is.na(er_accept) & er_accept == 1, 1, 0)
+  ),
+    er_otherreg = ifelse(!is.na(er_otherreg) & er_otherreg == 1, 1, 0)) %>%
+  relocate(
+    er_reapp, er_pleasure, er_distract, er_sitmod, er_socsupp, er_accept, er_otherreg,
+    .after = regulation_yn
+  )
+   
+df_reg_strats <- df_reg_strats %>%
+  arrange(PID, regret_id, followup_id) %>%
+  group_by(PID, regret_id) %>%
+  mutate(
+    er_reapp_previous = lag(er_reapp),
+    er_pleasure_previous = lag(er_pleasure),
+    er_distract_previous = lag(er_distract),
+    er_sitmod_previous = lag(er_sitmod),
+    er_socsupp_previous = lag(er_socsupp),
+    er_accept_previous = lag(er_accept),
+    er_otherreg_previous = lag(er_otherreg)
+  ) %>%
+  ungroup()
+
+df_long_strats <- df_reg_strats %>%
+  pivot_longer(
+    cols = ends_with("_previous"),
+    names_to = "strategy",
+    values_to = "used_strategy"
+  ) %>%
+  mutate(strategy = recode(strategy,
+    er_reapp_previous = "Reappraisal",
+    er_pleasure_previous = "Pleasure",
+    er_distract_previous = "Distraction",
+    er_sitmod_previous = "Situation Modification",
+    er_socsupp_previous = "Social Support",
+    er_accept_previous = "Acceptance",
+    er_otherreg_previous = "Other Regulation"
+  )) %>%
+  filter(!is.na(used_strategy), !is.na(regret_change))
+
+df_summary_strats <- df_long_strats %>%
+  group_by(strategy, used_strategy) %>%
+  summarise(
+    mean_change = mean(regret_change, na.rm = TRUE),
+    se = sd(regret_change, na.rm = TRUE) / sqrt(n()),
+    n = n(),
+    .groups = "drop"
+  )
+
+ggplot(df_summary_strats, aes(x = factor(used_strategy), y = mean_change, fill = factor(used_strategy))) +
+  geom_bar(stat = "identity") +
+  geom_errorbar(aes(ymin = mean_change - se, ymax = mean_change + se), width = 0.2) +
+  facet_wrap(~ strategy) +
+  labs(
+    title = "Mean Change in Regret Intensity by Prior Use of Each Regulation Strategy",
+    x = "Strategy Used at Previous Ping (0 = No, 1 = Yes)",
+    y = "Mean Change in Regret Intensity"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+#number of strategies used at the previous ping
+ggplot(df_reg_strats, aes(x = factor(er_reapp_previous + er_pleasure_previous + er_distract_previous +
+                                      er_sitmod_previous + er_socsupp_previous + er_accept_previous + er_otherreg_previous),
+                          y = regret_change)) +
+  geom_boxplot() +
+  labs(
+    title = "Change in Regret Intensity by Number of Strategies Used at Previous Ping",
+    x = "Number of Strategies Used (0-7)",
+    y = "Change in Regret Intensity"
+  ) +
+  theme_minimal()
+```
+
+# reversal strategies
+```{r}
+df_reg_strats <- df_ema_followups %>% #will have to look at this, at some point between df_ema_folllowups and now the reversal strat data was left behind so reverting back to this
+  select(PID, regret_id, followup_id, recorded_date, reverse_undo, reverse_makeup, reverse_plan, reverse_amends, regret_intensity) %>%
+  arrange(PID, regret_id, followup_id) %>%
+  group_by(PID, regret_id) %>%
+  mutate(
+        regret_change = regret_intensity - lag(regret_intensity),
+    reverse_undo = lag(reverse_undo),
+    reverse_makeup = lag(reverse_makeup),
+    reverse_plan = lag(reverse_plan),
+    reverse_amends = lag(reverse_amends)
+  ) %>%
+  ungroup()
+df_long_reversal <- df_reg_strats %>%
+  pivot_longer(
+    cols = starts_with("reverse_"),
+    names_to = "reversal_strategy",
+    values_to = "reversal_value"
+  ) %>%
+  filter(!is.na(reversal_value), !is.na(regret_change))
+
+df_summary_reversal <- df_long_reversal %>% 
+  group_by(reversal_strategy, reversal_value) %>%
+  summarise(
+    mean_change = mean(regret_change, na.rm = TRUE),
+    se = sd(regret_change, na.rm = TRUE) / sqrt(n()),
+    n = n(),
+    .groups = "drop"
+  )
+
+ggplot(df_summary_reversal, aes(x = reversal_value, y = mean_change, color = reversal_strategy)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(
+    title = "Mean Change in Regret Intensity by Reversal Strategy, Raw Value",
+    x = "Reversal Strategy Rating at Previous Ping",
+    y = "Mean Change in Regret Intensity"
+  ) +
+  theme_minimal() +
+  facet_wrap(~ reversal_strategy)
+
+# binary - any reversal strategy used at previous ping vs change in regret intensity
+df_binary_reversal <- df_long_reversal %>%
+  mutate(reversal_used = ifelse(reversal_value > 0, 1, 0)) %>%
+  group_by(reversal_strategy, reversal_used) %>%
+  summarise(
+    mean_change = mean(regret_change, na.rm = TRUE),
+    se = sd(regret_intensity, na.rm = TRUE) / sqrt(n()),
+    n = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(reversal_used = factor(reversal_used, levels = c(0, 1), labels = c("No", "Yes")))
+
+ggplot(df_binary_reversal, aes(x = reversal_used, y = mean_change, fill = reversal_strategy)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_errorbar(aes(ymin = mean_change - se, ymax = mean_change + se), width = 0.2, position = position_dodge(0.9)) +
+  labs(
+    title = "Mean Change in Regret Intensity by Reversal Strategy, Binary",
+    x = "Reversal Strategy Used (No/Yes)",
+    y = "Mean Change in Regret Intensity"
+  ) +
+  theme_minimal() +
+  facet_wrap(~ reversal_strategy) +
+  theme(legend.position = "bottom")
+
+```
+
+
 ```

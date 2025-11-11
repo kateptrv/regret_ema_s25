@@ -105,11 +105,153 @@ data |>
 ```
 
 ## Correlations
-
+# 4 models for reversal strategies - Suze
 ```{r}
+df <- df %>%
+  group_by(PID) %>%
+  mutate(regret_intensity_pc = as.numeric(scale(regret_intensity, scale = FALSE))) %>%
+  ungroup() # person-centering (?)
 
+model_undo <- lmer(reverse_undo ~ regret_intensity_pc + (1 | PID), data = df) #failed to converge as (1 + [predictor] | PID)
+tab_model(model_undo)
+plot_model(model_undo)
+
+model_makeup <- lmer(reverse_makeup ~ regret_intensity_pc + (1 | PID), data = df)
+tab_model(model_makeup)
+plot_model(model_makeup)
+
+model_plan <- lmer(reverse_plan ~ regret_intensity_pc + (1 | PID), data = df)
+tab_model(model_plan)
+plot_model(model_plan)
+
+model_amends <- lmer(reverse_amends ~ regret_intensity_pc + (1 | PID), data = df)
+tab_model(model_amends)
+plot_model(model_amends)
+
+lm.beta.lmer <- function(mod) {
+   b <- fixef(mod)[-1]
+   sd.x <- apply(getME(mod,"X")[,-1],2,sd)
+   sd.y <- sd(getME(mod,"y"))
+   b*sd.x/sd.y
+}      #is this model assuming we have at least one predictor?
+
+lm.beta.lmer(model_undo)
+lm.beta.lmer(model_makeup)
+lm.beta.lmer(model_plan)
+lm.beta.lmer(model_amends)
 ```
 
+# 6 models for ER strategies - Suze
+```{r}
+model_pleasure  <- lmer(er_pleasure  ~ regret_intensity_pc + (1 + regret_intensity_pc | PID), data = df) # not failing to converge
+tab_model(model_pleasure)
+lm.beta.lmer(model_pleasure) #sd = 0 ?
+model_pleasure_ri <- lmer(er_pleasure ~ regret_intensity_pc + (1 | PID), data = df) # not failing to converge # random intercepts only
+tab_model(model_pleasure_ri)
+
+model_distract <- lmer(er_distract ~ regret_intensity_pc + (1 + regret_intensity_pc | PID), data = df) 
+tab_model(model_distract)
+lm.beta.lmer(model_distract) #sd = 0 ?
+
+model_sitmod <- lmer(er_sitmod ~ regret_intensity_pc + (1 | PID), data = df)
+tab_model(model_sitmod)
+lm.beta.lmer(model_sitmod)
+
+model_socsupp <- lmer(er_socsupp ~ regret_intensity_pc + (1 | PID), data = df)
+tab_model(model_socsupp)
+lm.beta.lmer(model_socsupp)
+
+model_accept <- lmer(er_accept ~ regret_intensity_pc + (1 | PID), data = df)
+tab_model(model_accept)
+lm.beta.lmer(model_accept) 
+
+model_otherreg <- lmer(er_otherreg ~ regret_intensity_pc + (1 + regret_intensity_pc | PID), data = df)
+tab_model(model_accept)
+lm.beta.lmer(model_otherreg)
+```
+
+# Lagged strategy/reversal 
+```{r}
+df_lag <- df %>%
+  filter(!is.na(followup_id)) %>%
+  group_by(PID, regret_id) %>%
+  filter(n() > 1) %>%
+  arrange(PID, regret_id, followup_id)
+df_lag <- df_lag %>%
+  group_by(PID, regret_id) %>%
+  mutate(lag_reverse_undo = lag(reverse_undo)) %>%
+  ungroup() %>%
+  filter(!is.na(lag_reverse_undo), !is.na(regret_intensity)) %>%
+  group_by(PID) %>%
+  mutate(lag_reverse_undo_pc = as.numeric(scale(lag_reverse_undo, scale = FALSE))) %>%
+  ungroup()
+
+model_lag_undo <- lmer(regret_intensity ~ lag_reverse_undo_pc + (1 + lag_reverse_undo_pc | PID), data = df_lag)
+tab_model(model_lag_undo)
+plot_model(model_lag_undo)
+lm.beta.lmer(model_lag_undo)
+
+
+df_lag <- df %>%
+  filter(!is.na(followup_id)) %>%
+  group_by(PID, regret_id) %>%
+  filter(n() > 1) %>%
+  arrange(PID, regret_id, followup_id)
+df_lag <- df_lag %>%
+  group_by(PID, regret_id) %>%
+  mutate(lag_reverse_makeup = lag(reverse_makeup)) %>%
+  ungroup() %>%
+  filter(!is.na(lag_reverse_makeup), !is.na(regret_intensity)) %>%
+  group_by(PID) %>%
+  mutate(lag_reverse_makeup_pc = as.numeric(scale(lag_reverse_makeup, scale = FALSE))) %>%
+  ungroup()
+
+model_lag_makeup <- lmer(regret_intensity ~ lag_reverse_makeup_pc + (1 | PID), data = df_lag) #gave singular fit
+tab_model(model_lag_makeup)
+tab_model(model_lag_makeup)
+plot_model(model_lag_makeup)
+lm.beta.lmer(model_lag_makeup)
+
+
+df_lag <- df %>%
+  filter(!is.na(followup_id)) %>%
+  group_by(PID, regret_id) %>%
+  filter(n() > 1) %>%
+  arrange(PID, regret_id, followup_id)
+df_lag <- df_lag %>%
+  group_by(PID, regret_id) %>%
+  mutate(lag_reverse_plan = lag(reverse_plan)) %>%
+  ungroup() %>%
+  filter(!is.na(lag_reverse_plan), !is.na(regret_intensity)) %>%
+  group_by(PID) %>%
+  mutate(lag_reverse_plan_pc = as.numeric(scale(lag_reverse_plan, scale = FALSE))) %>%
+  ungroup()
+
+model_lag_plan <- lmer(regret_intensity ~ lag_reverse_plan_pc + (1 | PID), data = df_lag) #failed to converse
+tab_model(model_lag_plan)
+plot_model(model_lag_plan)
+lm.beta.lmer(model_lag_plan)
+
+
+df_lag <- df %>%
+  filter(!is.na(followup_id)) %>%
+  group_by(PID, regret_id) %>%
+  filter(n() > 1) %>%
+  arrange(PID, regret_id, followup_id)
+df_lag <- df_lag %>%
+  group_by(PID, regret_id) %>%
+  mutate(lag_reverse_amends = lag(reverse_amends)) %>%
+  ungroup() %>%
+  filter(!is.na(lag_reverse_amends), !is.na(regret_intensity)) %>%
+  group_by(PID) %>%
+  mutate(lag_reverse_amends_pc = as.numeric(scale(lag_reverse_amends, scale = FALSE))) %>%
+  ungroup()
+
+model_lag_amends <- lmer(regret_intensity ~ lag_reverse_amends_pc + (1 + lag_reverse_amends_pc | PID), data = df_lag)
+tab_model(model_lag_amends)
+plot_model(model_lag_amends)
+lm.beta.lmer(model_lag_amends)
+```
 
 ```{r}
 model_1 <- lmer(rumination ~ regret_intensity + (1 | PID), data = data)
@@ -283,4 +425,102 @@ data |>
   geom_density(aes(fill = "Rumination"), alpha = 0.5) +
   labs(x = "Rumination", y = "Count") +
   facet_wrap(~ !is.na(regret_id), scales = "free")
+```
+
+# lagged models with 2 predictors
+```{r}
+df <- df %>%
+  group_by(PID, regret_id) %>%
+  mutate(initial_intensity = regret_intensity[followup_id == 1][1]) %>%
+  ungroup()
+
+# Undo 
+df_lagged <- df %>%
+  filter(!is.na(followup_id)) %>%
+  group_by(PID, regret_id) %>%
+  filter(n() > 1) %>% 
+  arrange(PID, regret_id, followup_id) %>%
+  mutate(lag_reverse_undo = lag(reverse_undo)) %>%
+  ungroup() %>%
+  filter(!is.na(lag_reverse_undo), !is.na(regret_intensity)) %>%
+  group_by(PID) %>%
+  mutate(lag_reverse_undo_pc = as.numeric(scale(lag_reverse_undo, scale = FALSE))) %>%
+  ungroup()
+model_lag_undo_initial <- lmer(regret_intensity ~ lag_reverse_undo_pc + initial_intensity + (1 | PID), data = df_lagged)
+tab_model(model_lag_undo_initial)
+plot_model(model_lag_undo_initial)
+
+
+# Makeup
+df_lagged <- df %>%
+  filter(!is.na(followup_id)) %>%
+  group_by(PID, regret_id) %>%
+  filter(n() > 1) %>% 
+  arrange(PID, regret_id, followup_id) %>%
+  mutate(lag_reverse_makeup = lag(reverse_makeup)) %>%
+  ungroup() %>%
+  filter(!is.na(lag_reverse_makeup), !is.na(regret_intensity)) %>%
+  group_by(PID) %>%
+  mutate(lag_reverse_makeup_pc = as.numeric(scale(lag_reverse_makeup, scale = FALSE))) %>%
+  ungroup()
+model_lag_makeup_initial <- lmer(regret_intensity ~ lag_reverse_makeup_pc + initial_intensity + (1 | PID), data = df_lagged)
+tab_model(model_lag_makeup_initial)
+plot_model(model_lag_makeup_initial)
+
+# Plan
+df_lagged <- df %>%
+  filter(!is.na(followup_id)) %>%
+  group_by(PID, regret_id) %>%
+  filter(n() > 1) %>% 
+  arrange(PID, regret_id, followup_id) %>%
+  mutate(lag_reverse_plan = lag(reverse_plan)) %>%
+  ungroup() %>%
+  filter(!is.na(lag_reverse_plan), !is.na(regret_intensity)) %>%
+  group_by(PID) %>%
+  mutate(lag_reverse_plan_pc = as.numeric(scale(lag_reverse_plan, scale = FALSE))) %>%
+  ungroup()
+model_lag_plan_initial <- lmer(regret_intensity ~ lag_reverse_plan_pc + initial_intensity + (1 | PID), data = df_lagged)
+tab_model(model_lag_plan_initial)
+plot_model(model_lag_plan_initial)
+
+# Amends
+df_lagged <- df %>%
+  filter(!is.na(followup_id)) %>%
+  group_by(PID, regret_id) %>%
+  filter(n() > 1) %>% 
+  arrange(PID, regret_id, followup_id) %>%
+  mutate(lag_reverse_amends = lag(reverse_amends)) %>%
+  ungroup() %>%
+  filter(!is.na(lag_reverse_amends), !is.na(regret_intensity)) %>%
+  group_by(PID) %>%
+  mutate(lag_reverse_amends_pc = as.numeric(scale(lag_reverse_amends, scale = FALSE))) %>%
+  ungroup()
+model_lag_amends_initial <- lmer(regret_intensity ~ lag_reverse_amends_pc + initial_intensity + (1 | PID), data = df_lagged)
+tab_model(model_lag_amends_initial)
+plot_model(model_lag_amends_initial)
+
+# modeling time since the start of the episode within episodes
+
+df <- df_ema_merged %>%
+  filter(!is.na(regret_id), !is.na(regret_intensity), !is.na(recorded_date)) %>%
+  arrange(PID, regret_id, recorded_date) %>%
+  group_by(PID, regret_id) %>%
+  mutate(time_since_start_min = as.numeric(difftime(recorded_date, min(recorded_date), units = "mins")),
+    time_point = row_number(),
+    initial_intensity = first(regret_intensity)
+  ) %>%
+  ungroup()
+
+df <- df %>%
+  group_by(PID) %>%
+  mutate(time_point_pc = as.numeric(scale(time_point, scale = FALSE)), time_minutes_pc = as.numeric(scale(time_since_start_min, scale = FALSE)), initial_intensity_pc = as.numeric(scale(initial_intensity, scale = FALSE))
+  ) %>%
+  ungroup()
+
+# regret_intensity ~ time
+model_time <- lmer(regret_intensity ~ time_point_pc + (1 + time_point_pc | PID), data = df)
+
+# regret_intensity ~ time + initial_intensity
+model_time_initial <- lmer(regret_intensity ~ time_point_pc + initial_intensity_pc + (1 + time_point_pc | PID), data = df)
+
 ```
