@@ -15,11 +15,14 @@ p_load(tidyverse, tidyr, dplyr, ggplot2, readxl, lme4, stats, effectsize, sjPlot
 ```
 
 ```{r}
-data <- read_csv("processed_merged.csv")
+data <- read_csv("../data/processed_merged.csv")
 ```
 
 ```{r}
-ggthemr(palette = "grape", type = "outer", line_weight = 0.5, text_size = 16, spacing = 2, layout = "clean")
+# aesthetics
+ggthemr(palette = "grape", type = "outer", line_weight = 0.5, text_size = 16, spacing = 2, layout = "clear")
+
+swatch()
 
 showtext_auto()
 showtext_opts(nseg = 5)
@@ -32,13 +35,13 @@ showtext_opts(nseg = 5)
 ```{r}
 data |>
   mutate(isregret = ifelse(!is.na(regret_id), 1, 0)) |>
-  # plot histogram of isregret
   ggplot(aes(x = isregret)) +
   geom_bar() +
   labs(x = "Regret reported?", y = "Count") +
   scale_x_continuous(breaks = c(0, 1), labels = c("No", "Yes")) 
   
 ```
+
 ```{r}
 data |>
   select(PID, regret_count) |>
@@ -68,46 +71,143 @@ data |>
   # add mean line
   geom_vline(aes(xintercept = median(n_followups, na.rm = TRUE)), color = "black", linetype = "dashed")
 
-```
-
-```{r}
 # print range of followup_id
 data |>
   select(PID, followup_id) |>
-  summarize(min_followup = min(followup_id, na.rm = TRUE), max_followup = max(followup_id, na.rm = TRUE)) 
-  
-  
+  summarize(min_followup = min(followup_id, na.rm = TRUE), max_followup = max(followup_id, na.rm = TRUE))
+
+```
+
+### Intensity over time
+
+```{r}
+data |>
+  group_by(PID, regret_id) |>
+  mutate(mean_intensity = mean(regret_intensity, na.rm = TRUE)) |>
+  mutate(pmc_intensity = regret_intensity - mean_intensity) |>
+  ungroup() |>
+  group_by(PID, regret_id) |>
+  mutate(followup_percent = (followup_id - 1) / (max(followup_id, na.rm = TRUE) - 1)) |>
+  ungroup() |>
+  select(PID, regret_id, followup_id, pmc_intensity, followup_percent) |>
+  ungroup() |>
+  ggplot(aes(x = followup_percent, y = pmc_intensity)) +
+  geom_point(position = position_jitter(w = 0.025)) +
+  geom_smooth(method = "lm") +
+  labs(x = "Time from event onset to resolution", y = "Regret intensity") +
+  stat_cor(method = "pearson")
+```
+
+## Single participant trajectories
+
+```{r}
 data |>
   filter(regret_count > 0) |>
-  # select random 6 PIDs
-  filter(PID == 112204) |>
+  filter(PID == 112204) |> # selecting a single PID to look at in more depth
   ggplot(aes(x = followup_id, y = regret_intensity, group = regret_id, color = factor(regret_id), fill = factor(regret_id))) +
   geom_line() +
   geom_point() +
   labs(x = "Follow-up ID", y = "Regret intensity") +
   facet_wrap(~PID, scales = "free")
 ```
+
 ```{r}
-show_decision_text <- function(PID, regret_index) {
-  data |>
-    filter(PID == !!PID, regret_id == !!regret_index, followup_id == 1) |>
-    summarise(decision = first(decision)) |>
-    pull(decision)
+# function to plot each participant individually
+plot_participant_trajectories <- function(data, pid) {
+  p <- data %>%
+    filter(PID == pid, regret_count > 0) %>%
+    ggplot(aes(x = followup_id, y = regret_intensity, group = regret_id, color = factor(regret_id))) +
+    stat_smooth(method = "lm", se = FALSE, span = 0.1) +
+    geom_point() +
+    ylim(0, 100) +
+    scale_color_brewer(palette = "Set3") +
+    scale_x_continuous(breaks = seq(1, 26, by = 5), limits = c(1, 26)) +
+    labs(title = paste("PID", pid), x = "Follow-up ID", y = "Regret intensity") +
+    theme(legend.position = "none")
+  return(p)
 }
 
-show_decision_text(112234, 3)
+# plot 
+p_list <- lapply(unique(data$PID), function(pid) plot_participant_trajectories(data, pid))
+
+# save plots as pdfs, 6 per page
+pdf("../figures/participant_trajectories.pdf", width = 11, height = 8.5)
+for (i in seq(1, length(p_list), by = 6)) {
+  gridExtra::grid.arrange(grobs = p_list[i:min(i+5, length(p_list))], ncol = 2)
+}
+```
+
+## Strategies
+
+```{r}
+data |>
+  select(-(er_otherreg_text)) |>
+  pivot_longer(cols = starts_with("er_"), names_to = "strategy", values_to = "value") |>
+  filter(!is.na(regret_id)) |>
+  filter(value == 1) |>
+  mutate(strategy = case_when(
+  strategy == "er_accept" ~ "acceptance",
+  strategy == "er_distract" ~ "distraction",
+  strategy == "er_otherreg" ~ "other",
+  strategy == "er_pleasure" ~ "pleasure-seeking",
+  strategy == "er_reapp" ~ "reappraisal",
+  strategy == "er_sitmod" ~ "situation-modification",
+  strategy == "er_socsupp" ~ "social support"
+)) |>
+  ggplot(aes(x = strategy, fill = strategy)) +
+  geom_bar(position = "dodge") +
+  labs(x = "Strategy", y = "Count (N = 1,517 pings)") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme(legend.position = "none") +
+  coord_flip()
+  
 ```
 
 ```{r}
 data |>
-  filter(PID == 112204) |>
-  select(decision, regret_id, followup_id, rumination, regret_intensity) 
+  ggplot(aes(x = regret_intensity, y = reverse_plan)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  stat_cor(method = "pearson")
 ```
 
-## Correlations
-# 4 models for reversal strategies - Suze
+## Rumination
+
 ```{r}
-df <- df %>%
+data |>
+  filter(!is.na(regret_id)) |>
+  ggplot(aes(regret_intensity, rumination)) +
+  geom_point(position = position_jitter(h = 0.2)) +
+  #geom_smooth(method = "lm") +
+  labs(x = "Regret intensity", y = "Rumination") +
+  # y axis labels 1 = "haven't thought about it at all", 2 = "thought about it a little", 3 = "thought about it a lot", 4 = "couldn't stop thinking about it"\
+  scale_y_continuous(breaks = 1:4, labels = c("Haven't thought about it at all", "Thought about it a little", "Thought about it a lot", "Couldn't stop thinking about it")) +
+  stat_cor(method = "pearson") 
+  
+```
+## Mood
+
+```{r}
+data |>
+  # histogram of emotions
+  pivot_longer(cols = c(joy:disappointment), names_to = "emotion", values_to = "value") |>
+  # plot mean value by emotion
+  ggplot(aes(x = emotion, y = value, color = emotion, fill = emotion)) +
+  stat_summary(
+    fun.data = mean_cl_boot, conf.int = .95, B = 5000,
+    geom = "pointrange", linewidth = 1, size = 1,
+    shape = 21 
+  ) +
+  labs(x = "Emotion", y = "Mean value (95% CI)") +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank()) 
+  
+  
+```
+
+# Suze archive
+
+```{r}
+df <- data %>%
   group_by(PID) %>%
   mutate(regret_intensity_pc = as.numeric(scale(regret_intensity, scale = FALSE))) %>%
   ungroup() # person-centering (?)
@@ -141,7 +241,7 @@ lm.beta.lmer(model_plan)
 lm.beta.lmer(model_amends)
 ```
 
-# 6 models for ER strategies - Suze
+## 6 models for ER strategies - Suze
 ```{r}
 model_pleasure  <- lmer(er_pleasure  ~ regret_intensity_pc + (1 + regret_intensity_pc | PID), data = df) # not failing to converge
 tab_model(model_pleasure)
@@ -170,7 +270,7 @@ tab_model(model_accept)
 lm.beta.lmer(model_otherreg)
 ```
 
-# Lagged strategy/reversal 
+## Lagged strategy/reversal 
 ```{r}
 df_lag <- df %>%
   filter(!is.na(followup_id)) %>%
@@ -270,164 +370,7 @@ data |>
   stat_cor(method = "pearson")
 ```
 
-```{r}
-data |>
-  filter(!is.na(regret_id)) |>
-  ggplot(aes(regret_intensity, rumination)) +
-  geom_point(position = position_jitter(h = 0.2)) +
-  #geom_smooth(method = "lm") +
-  labs(x = "Regret intensity", y = "Rumination") +
-  # y axis labels 1 = "haven't thought about it at all", 2 = "thought about it a little", 3 = "thought about it a lot", 4 = "couldn't stop thinking about it"\
-  scale_y_continuous(breaks = 1:4, labels = c("Haven't thought about it at all", "Thought about it a little", "Thought about it a lot", "Couldn't stop thinking about it")) +
-  stat_cor(method = "pearson") 
-  
-```
-
-
-```{r}
-cor(data$regret_intensity, data$rumination, use = "pairwise.complete.obs", method = "pearson")
-
-model1_lm <- lm(rumination ~ regret_intensity, data = data) 
-# standardized beta
-summary(model1_lm)
-lm.beta(model1_lm)
-tab_model(model1_lm)
-
-data |>
-  mutate(intensity_std = sd(regret_intensity, na.rm = TRUE)) 
-```
-
-```{r}
-lm.beta.lmer <- function(mod) {
-   b <- fixef(mod)[-1]
-   sd.x <- apply(getME(mod,"X")[,-1],2,sd)
-   sd.y <- sd(getME(mod,"y"))
-   b*sd.x/sd.y
-}
-
-data |>
-  group_by(PID) |>
-  mutate(mean_regret_intensity = mean(regret_intensity, na.rm = TRUE)) |>
-  ungroup() |>
-  mutate(regret_intensity_pmc = regret_intensity - mean_regret_intensity) 
-model1 <- lmer(rumination ~ scale(regret_intensity) + (1 | PID), data = data)
-tab_model(model1)
-
-ggthemr_reset()
-data |>
-  ggplot(aes(x = scale(regret_intensity), y = rumination, group = PID)) +
-  #geom_point(position = position_jitter(h = 0.2)) +
-  geom_smooth(method = "lm", se = FALSE) +
-  labs(x = "Regret intensity (PMC)", y = "Rumination") +
-# remove legends
-  theme(legend.position = "none")
-```
-
-```{r}
-tab_model(lmer(reverse_undo ~ scale(regret_intensity) + (1 + regret_intensity | PID), data = data))
-data |>
-  ggplot(aes(x = scale(regret_intensity), y = reverse_undo, group = PID)) +
-  geom_smooth(method = "lm", se = FALSE) +
-  labs(x = "Regret intensity", y = "Reverse undo") 
-```
-
-```{r}
-tab_model(lmer(regret_intensity ~ lag(er_reapp) + (1 | PID), data = data))
-data |> 
-  ggplot(aes(x = lag(er_reapp), y = regret_intensity)) +
-  stat_smooth(method = "lm", se = FALSE, aes(group = PID)) +
-  stat_smooth(method = "lm", se = FALSE, color = "black")
-```
-
-
-```{r}
-data |>
-  group_by(PID, regret_id) |>
-  mutate(mean_intensity = mean(regret_intensity, na.rm = TRUE)) |>
-  mutate(pmc_intensity = regret_intensity - mean_intensity) |>
-  ungroup() |>
-  group_by(PID, regret_id) |>
-  mutate(followup_percent = (followup_id - 1) / (max(followup_id, na.rm = TRUE) - 1)) |>
-  ungroup() |>
-  select(PID, regret_id, followup_id, pmc_intensity, followup_percent) |>
-  ungroup() |>
-  ggplot(aes(x = followup_percent, y = pmc_intensity)) +
-  geom_point(position = position_jitter(w = 0.025)) +
-  geom_smooth(method = "lm") +
-  labs(x = "Time from event onset to resolution", y = "Regret intensity") +
-  stat_cor(method = "pearson")
-```
-
-```{r}
-data |>
-  ggplot(aes(x = regret_intensity, y = reverse_plan)) +
-  geom_point() +
-  geom_smooth(method = "lm") +
-  stat_cor(method = "pearson")
-```
-
-```{r}
-data |>
-  select(-(er_otherreg_text)) |>
-  pivot_longer(cols = starts_with("er_"), names_to = "strategy", values_to = "value") |>
-  filter(!is.na(regret_id)) |>
-  filter(value == 1) |>
-  mutate(strategy = case_when(
-  strategy == "er_accept" ~ "acceptance",
-  strategy == "er_distract" ~ "distraction",
-  strategy == "er_otherreg" ~ "other",
-  strategy == "er_pleasure" ~ "pleasure-seeking",
-  strategy == "er_reapp" ~ "reappraisal",
-  strategy == "er_sitmod" ~ "situation-modification",
-  strategy == "er_socsupp" ~ "social support"
-)) |>
-  ggplot(aes(x = strategy, fill = strategy)) +
-  geom_bar(position = "dodge") +
-  labs(x = "Strategy", y = "Count (N = 1,517 pings)") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-  theme(legend.position = "none") +
-  coord_flip()
-  
-ggsave(filename = "figures/fig1_ema.pdf", device = pdf, width = 8.27, height = 5.83, units = "in", useDingbats = TRUE, dpi = 72)
-  
-```
-
-```{r}
-data |>
-  pivot_longer(cols = starts_with("reverse_"), names_to = "reverse_strategy", values_to = "value") |>
-  filter(!is.na(regret_id)) |>
-  ggplot(aes(x = value > 0, fill = reverse_strategy)) +
-  geom_bar(position = "dodge") +
-  labs(x = "Reverse strategy used", y = "Count") 
-```
-## Mood
-
-```{r}
-data |>
-  # histogram of emotions
-  pivot_longer(cols = c(joy:disappointment), names_to = "emotion", values_to = "value") |>
-  # plot mean value by emotion
-  ggplot(aes(x = emotion, y = value, color = emotion, fill = emotion)) +
-  stat_summary(
-    fun.data = mean_cl_boot, conf.int = .95, B = 5000,
-    geom = "pointrange", linewidth = 1, size = 1,
-    shape = 21 
-  ) +
-  labs(x = "Emotion", y = "Mean value (95% CI)") +
-  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank()) 
-  
-  
-```
-
-```{r}
-data |>
-  ggplot(aes(x = rumination)) +
-  geom_density(aes(fill = "Rumination"), alpha = 0.5) +
-  labs(x = "Rumination", y = "Count") +
-  facet_wrap(~ !is.na(regret_id), scales = "free")
-```
-
-# lagged models with 2 predictors
+## lagged models with 2 predictors
 ```{r}
 df <- df %>%
   group_by(PID, regret_id) %>%
@@ -523,4 +466,60 @@ model_time <- lmer(regret_intensity ~ time_point_pc + (1 + time_point_pc | PID),
 # regret_intensity ~ time + initial_intensity
 model_time_initial <- lmer(regret_intensity ~ time_point_pc + initial_intensity_pc + (1 + time_point_pc | PID), data = df)
 
+```
+
+
+```{r}
+cor(data$regret_intensity, data$rumination, use = "pairwise.complete.obs", method = "pearson")
+
+model1_lm <- lm(rumination ~ regret_intensity, data = data) 
+# standardized beta
+summary(model1_lm)
+lm.beta(model1_lm)
+tab_model(model1_lm)
+
+data |>
+  mutate(intensity_std = sd(regret_intensity, na.rm = TRUE)) 
+```
+
+```{r}
+lm.beta.lmer <- function(mod) {
+   b <- fixef(mod)[-1]
+   sd.x <- apply(getME(mod,"X")[,-1],2,sd)
+   sd.y <- sd(getME(mod,"y"))
+   b*sd.x/sd.y
+}
+
+data |>
+  group_by(PID) |>
+  mutate(mean_regret_intensity = mean(regret_intensity, na.rm = TRUE)) |>
+  ungroup() |>
+  mutate(regret_intensity_pmc = regret_intensity - mean_regret_intensity) 
+model1 <- lmer(rumination ~ scale(regret_intensity) + (1 | PID), data = data)
+tab_model(model1)
+
+ggthemr_reset()
+data |>
+  ggplot(aes(x = scale(regret_intensity), y = rumination, group = PID)) +
+  #geom_point(position = position_jitter(h = 0.2)) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Regret intensity (PMC)", y = "Rumination") +
+# remove legends
+  theme(legend.position = "none")
+```
+
+```{r}
+tab_model(lmer(reverse_undo ~ scale(regret_intensity) + (1 + regret_intensity | PID), data = data))
+data |>
+  ggplot(aes(x = scale(regret_intensity), y = reverse_undo, group = PID)) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Regret intensity", y = "Reverse undo") 
+```
+
+```{r}
+tab_model(lmer(regret_intensity ~ lag(er_reapp) + (1 | PID), data = data))
+data |> 
+  ggplot(aes(x = lag(er_reapp), y = regret_intensity)) +
+  stat_smooth(method = "lm", se = FALSE, aes(group = PID)) +
+  stat_smooth(method = "lm", se = FALSE, color = "black")
 ```
