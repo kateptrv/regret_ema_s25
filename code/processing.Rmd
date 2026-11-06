@@ -10,29 +10,112 @@ library(qualtRics)
 library(zoo)
 library(ggplot2)
 
-ema <- readr::read_csv("data/regret_ema.csv")
-intake <- readr::read_csv("data/regret_ema_intake.csv")
 ```
 
 ```{r}
-ema <- read_survey("data/regret_ema.csv")
-intake <- read_survey("data/regret_ema_intake.csv")
+# Qualtrics exports timestamps in Mountain time (verified against ping click times in the emapingbot export)
+ema <- read_survey("../data/regret_ema.csv", time_zone = "America/Denver")
+intake <- read_survey("../data/regret_ema_intake.csv", time_zone = "America/Denver")
+pings <- read_csv("../data/kpetrova_export/kpetrova_pings.csv", col_types = cols(study_pid = "c"))
 ```
 
 # Processing
+
+## Ping validation
+
+Pings were sent 4x/day (9-12, 12-3, 3-6, 6-9) and should have expired 1 hour after being sent, but the links stayed open, so some participants responded late or more than once to the same ping. Each response is matched to the ping it came from using the emapingbot export; we keep only responses started before their ping expired, and only one response per ping (the first completed one, or the first one if none were completed). Follow-ups to a regret that was first reported in an invalid ping are dropped too.
+
+```{r}
+pings_regret <- pings %>%
+  filter(study_id == 30, is.na(deleted_at), !is.na(sent_ts)) %>%  # "regret ema" study
+  select(ping_id, study_pid, sent_ts, expire_ts, first_clicked_ts, last_clicked_ts)
+
+ema <- ema %>%
+  mutate(response_row = row_number())
+
+ping_match <- ema %>%
+  select(response_row, PID, StartDate, Finished) %>%
+  inner_join(pings_regret, by = c("PID" = "study_pid"), relationship = "many-to-many") %>%
+  filter(sent_ts <= StartDate + 10) %>%
+  mutate(
+    click_gap = pmin(abs(as.numeric(difftime(StartDate, first_clicked_ts, units = "secs"))),
+                     abs(as.numeric(difftime(StartDate, last_clicked_ts, units = "secs"))), na.rm = TRUE),
+    match_quality = case_when(
+      click_gap <= 10 ~ 1,  # survey start matches a recorded click on this ping's link
+      StartDate >= first_clicked_ts - 10 & StartDate <= last_clicked_ts + 10 ~ 2,  # between first and last click on this ping's link
+      TRUE ~ 3  # otherwise, the most recently sent ping
+    )) %>%
+  group_by(response_row) %>%
+  arrange(match_quality, desc(sent_ts), .by_group = TRUE) %>%
+  slice(1) %>%
+  ungroup() %>%
+  mutate(late = StartDate > expire_ts) %>%
+  group_by(ping_id) %>%
+  arrange(late, desc(Finished == 1), StartDate, .by_group = TRUE) %>%
+  mutate(valid = !late & row_number() == 1) %>%
+  ungroup()
+
+ping_match %>%
+  summarise(n_matched = n(),
+            n_late = sum(late),
+            n_duplicate = sum(!late & !valid),
+            n_valid = sum(valid))
+
+# Follow-ups belong to the most recent regret report (regret_yn == 2) before them in the full,
+# unfiltered sequence. Drop valid follow-ups whose initial regret report was itself invalid;
+# otherwise they'd end up with no regret_id or get absorbed into the previous episode.
+orphaned_followups <- ema %>%
+  select(response_row, PID, StartDate, SURVEY_TYPE, regret_yn) %>%
+  left_join(ping_match %>% select(response_row, valid), by = "response_row") %>%
+  mutate(valid = coalesce(valid, FALSE)) %>%
+  arrange(PID, StartDate) %>%
+  group_by(PID) %>%
+  mutate(start_valid = if_else(regret_yn %in% 2, valid, NA)) %>%
+  fill(start_valid) %>%
+  ungroup() %>%
+  filter(SURVEY_TYPE %in% "followup", valid, !start_valid) %>%
+  pull(response_row)
+
+length(orphaned_followups)
+
+valid_responses <- ping_match %>%
+  filter(valid, !response_row %in% orphaned_followups) %>%
+  select(response_row, ping_sent_time = sent_ts)
+
+# audit trail: validation status of every participant response
+ping_validation_log <- ema %>%
+  filter(PID != "000000") %>%
+  select(response_row, ResponseId, PID, StartDate) %>%
+  left_join(ping_match %>% select(response_row, ping_id, sent_ts, expire_ts, late, valid),
+            by = "response_row") %>%
+  mutate(status = case_when(
+    is.na(ping_id)                           ~ "no matching ping",
+    late                                     ~ "late",
+    !valid                                   ~ "duplicate",
+    response_row %in% orphaned_followups     ~ "follow-up to invalid regret",
+    TRUE                                     ~ "valid"
+  )) %>%
+  select(-response_row, -valid)
+
+count(ping_validation_log, status)
+write_csv(ping_validation_log, "../data/ping_validation_log.csv")
+```
 
 ## EMA
 
 ```{r}
 df_ema <- ema %>%
   #filter(str_detect(RecordedDate, "^\\d{4}-\\d{2}-\\d{2}")) %>%  # eliminate junk rows.. lmk if you want me to move away from regex
-  mutate(RecordedDate = ymd_hms(RecordedDate)) %>%
+  # keeps only valid pings (also drops test PIDs without pings, e.g. 111111)
+  inner_join(valid_responses, by = "response_row") %>%
   arrange(PID, RecordedDate) %>%
   group_by(PID) %>%
   mutate(PING_NUM = row_number()) %>%
   ungroup() %>%
-  select(-c(StartDate:UserLanguage)) %>%
+  mutate(ping_time = RecordedDate) %>%
+  select(-c(StartDate:RecordedDate), -c(RecipientLastName:UserLanguage), -response_row) %>%  # keeps ResponseId as a stable row key
     relocate(PID, DAY_NUM, SURVEY_TYPE, DECISION, DECISION_TO_SHOW, NEXT_SURVEY) %>%
+    relocate(ping_sent_time, .after = ping_time) %>%
     filter(PID != "000000")
 ```
 
@@ -68,7 +151,10 @@ df_ema_intake <- df_ema %>%
     regret_START = ifelse(regret_yn == 2, 1, NA),
     regret_END = ifelse(
       (regret_yn == 2 & resolved == 1 ) |
-      (SURVEY_TYPE == "followup" & lead(SURVEY_TYPE) == "general"),
+      (SURVEY_TYPE == "followup" & lead(SURVEY_TYPE) == "general") |
+      # regret reported but the next survey wasn't a follow-up: otherwise the episode never
+      # closes and absorbs subsequent no-regret general surveys
+      (regret_yn == 2 & lead(SURVEY_TYPE) == "general"),
       1, NA
     )) |>
   # counting up number of regret starts per participant (ie number of regret events)
@@ -186,9 +272,44 @@ df_ema_intake <- df_ema %>%
          sadness = ifelse(is.na(regret_id) & is.na(sadness), 0, sadness),
          contentment = ifelse(is.na(regret_id) & is.na(contentment), 0, contentment),
          regret = ifelse(is.na(regret_id) & is.na(regret), 0, regret),
-         disappointment = ifelse(is.na(regret_id) & is.na(disappointment), 0, disappointment)) 
-  
-readr::write_csv(df_ema_intake, "processed_merged.csv")
+         disappointment = ifelse(is.na(regret_id) & is.na(disappointment), 0, disappointment))
+```
+
+## Regret codes
+
+Qualitative codes for each regret: life domain, agency, omission vs. commission, and
+concreteness (see `coding/codebook.md`). Codes
+are keyed by the `ResponseId` of the ping where the regret was first reported, and are
+copied to every ping in that episode. Run `domain_coding.R` to check that every regret
+is coded.
+
+```{r}
+regret_code_vars <- c("regret_domain", "regret_domain_secondary", "regret_agency",
+                      "regret_type", "regret_concreteness")
+
+regret_codes <- read_csv("../coding/regret_domain_codes.csv",
+                         col_types = cols(.default = "c")) %>%
+  select(ResponseId, all_of(regret_code_vars)) %>%
+  rename_with(\(x) paste0(x, "_start"), all_of(regret_code_vars))
+
+df_ema_intake <- df_ema_intake %>%
+  left_join(regret_codes, by = "ResponseId") %>%
+  group_by(PID, regret_id) %>%
+  # copy each code from the episode's first ping to every ping in the episode
+  mutate(across(all_of(paste0(regret_code_vars, "_start")),
+                \(x) if_else(is.na(regret_id), NA_character_, first(x[regret_yn %in% 2])),
+                .names = "{sub('_start$', '', .col)}")) %>%
+  ungroup() %>%
+  select(-ends_with("_start")) %>%
+  mutate(regret_concreteness = as.numeric(regret_concreteness))
+
+# episodes without a code (should be 0; otherwise see domain_coding.R)
+df_ema_intake %>%
+  filter(!is.na(regret_id)) %>%
+  distinct(PID, regret_id, regret_domain) %>%
+  summarise(n_episodes = n(), n_uncoded = sum(is.na(regret_domain)))
+
+readr::write_csv(df_ema_intake, "../data/processed_merged.csv")
 ```
 
 # For participant crediting
@@ -250,8 +371,8 @@ sessionInfo() %>%
 ```{r}
 df <- read_csv("processed_merged.csv")
 df_ema_merged <- read_csv("processed_merged.csv")
-read_csv("data/regret_ema.csv")
-df_raw <- read_csv("data/regret_ema.csv")
+read_csv("../data/regret_ema.csv")
+df_raw <- read_csv("../data/regret_ema.csv")
 
 df_raw_ordered <- df_raw %>%
   filter(!is.na(RecordedDate)) %>%
@@ -359,6 +480,19 @@ df_regret_durations_gte2_stats <- df_regret_durations_gte2 %>%
   )
 print(df_regret_durations_gte2_stats)
 ```
+```{r}
+# plot each episode duration by participant
+ggplot(df_regret_durations_all, aes(x = PID, y = regret_duration)) +
+  geom_point(color = "purple", alpha = 0.6) +
+  labs(
+    title = "Regret Duration by Participant",
+    x = "Participant ID", y = "Duration (minutes)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+
 
 # Suze Intensity as date vs time
 ```{r}

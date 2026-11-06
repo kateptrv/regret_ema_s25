@@ -18,14 +18,394 @@ p_load(tidyverse, tidyr, dplyr, ggplot2, readxl, lme4, stats, effectsize, sjPlot
 data <- read_csv("../data/processed_merged.csv")
 ```
 
+## Sanity check: when were pings sent and filled out?
+
+`ping_sent_time` (from the emapingbot export) and `ping_time` (Qualtrics RecordedDate, i.e.
+when the survey was submitted) are both in UTC. Converted to each participant's own time
+zone, pings should have been sent within the 9am-9pm windows, and every response should
+be submitted after its ping was sent. Responses must have been *started* within 1 hour
+of the ping (see processing.Rmd), so submission can run a bit past 60 minutes.
+
+```{r}
+participant_tz <- read_csv("../data/kpetrova_export/kpetrova_participants.csv",
+                           col_types = cols(study_pid = "c")) |>
+  filter(study_id == 30, str_detect(study_pid, "^\\d+$")) |>
+  distinct(PID = as.numeric(study_pid), tz)
+
+local_hour <- function(t, tz) map2_dbl(t, tz, \(t, tz) {
+  lt <- with_tz(t, tz)
+  hour(lt) + minute(lt) / 60 + second(lt) / 3600
+})
+
+ping_timing <- data |>
+  select(PID, DAY_NUM, PING_NUM, ping_sent_time, ping_time) |>
+  left_join(participant_tz, by = "PID") |>
+  mutate(
+    sent_hour_local   = local_hour(ping_sent_time, tz),
+    filled_hour_local = local_hour(ping_time, tz),
+    window = cut(sent_hour_local, breaks = c(9, 12, 15, 18, 21), right = FALSE,
+                 labels = c("9-12", "12-3", "3-6", "6-9")),
+    minutes_to_complete = as.numeric(difftime(ping_time, ping_sent_time, units = "mins"))
+  )
+
+hhmm <- function(h) {
+  m <- round(h * 60)
+  sprintf("%02d:%02d", m %/% 60, m %% 60)
+}
+
+# overall: study date range, time of day, and time from ping to submission
+ping_timing |>
+  summarise(
+    n_responses        = n(),
+    missing_tz         = sum(is.na(tz)),
+    first_ping_sent    = min(ping_sent_time),
+    last_ping_sent     = max(ping_sent_time),
+    first_filled       = min(ping_time),
+    last_filled        = max(ping_time),
+    earliest_sent_tod  = hhmm(min(sent_hour_local)),
+    latest_sent_tod    = hhmm(max(sent_hour_local)),
+    earliest_filled_tod = hhmm(min(filled_hour_local)),
+    latest_filled_tod  = hhmm(max(filled_hour_local)),
+    min_minutes_to_complete = min(minutes_to_complete),
+    max_minutes_to_complete = max(minutes_to_complete),
+    n_filled_before_sent    = sum(minutes_to_complete < 0)
+  ) |>
+  pivot_longer(everything(), values_transform = as.character)
+
+# by ping window (local time of day)
+ping_timing |>
+  group_by(window) |>
+  summarise(
+    n = n(),
+    earliest_sent   = hhmm(min(sent_hour_local)),
+    latest_sent     = hhmm(max(sent_hour_local)),
+    earliest_filled = hhmm(min(filled_hour_local)),
+    latest_filled   = hhmm(max(filled_hour_local)),
+    median_minutes_to_complete = median(minutes_to_complete),
+    max_minutes_to_complete    = max(minutes_to_complete),
+    .groups = "drop"
+  )
+
+# by participant
+ping_timing |>
+  group_by(PID, tz) |>
+  summarise(
+    n = n(),
+    first_filled = min(ping_time),
+    last_filled  = max(ping_time),
+    study_days   = as.numeric(difftime(last_filled, first_filled, units = "days")),
+    earliest_filled_tod = hhmm(min(filled_hour_local)),
+    latest_filled_tod   = hhmm(max(filled_hour_local)),
+    max_minutes_to_complete = max(minutes_to_complete),
+    .groups = "drop"
+  ) |>
+  arrange(desc(max_minutes_to_complete))
+
+ping_timing |>
+  pivot_longer(c(sent_hour_local, filled_hour_local), names_to = "event", values_to = "hour") |>
+  mutate(event = recode(event, sent_hour_local = "Ping sent", filled_hour_local = "Survey submitted")) |>
+  ggplot(aes(x = hour)) +
+  geom_histogram(binwidth = 0.25, boundary = 0) +
+  geom_vline(xintercept = c(9, 12, 15, 18, 21), linetype = "dashed") +
+  scale_x_continuous(breaks = seq(0, 24, 3)) +
+  facet_wrap(~event, ncol = 1) +
+  labs(x = "Local time of day (hour)", y = "Count")
+
+ggplot(ping_timing, aes(x = minutes_to_complete)) +
+  geom_histogram(binwidth = 5, boundary = 0) +
+  geom_vline(xintercept = 60, linetype = "dashed") +
+  labs(x = "Minutes from ping sent to survey submitted", y = "Count")
+```
+
 ```{r}
 # aesthetics
-ggthemr(palette = "grape", type = "outer", line_weight = 0.5, text_size = 16, spacing = 2, layout = "clear")
+ggthemr(palette = "grape", type = "outer", line_weight = 0.5, text_size = 16, spacing = 2, layout = "scientific")
 
 swatch()
 
 showtext_auto()
 showtext_opts(nseg = 5)
+```
+
+# Frisem talk
+```{r}
+time_summary <- data |>
+  arrange(PID, regret_id, ping_time) |>
+  group_by(PID, regret_id) |>
+  mutate(time_diff_min = as.numeric(
+      difftime(ping_time, lag(ping_time), units = "mins"))) |>
+  mutate(time_diff_min = case_when(followup_id == 1 ~ 0, TRUE ~ time_diff_min)) %>% 
+    summarise(
+    start_time = min(ping_time, na.rm = TRUE),
+    end_time   = max(ping_time, na.rm = TRUE),
+    duration_min = as.numeric(difftime(end_time, start_time, units = "mins")),
+    n_pings = n(),
+    n_followups = sum(followup_id > 1, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  filter(duration_min < 10080) |>
+  filter(!is.na(regret_id))
+  
+participant_summary <- time_summary %>%
+  group_by(PID) %>%
+  summarise(
+    mean_duration = mean(duration_min, na.rm = TRUE),
+    sd_duration   = sd(duration_min, na.rm = TRUE),
+    mean_followups = mean(n_followups, na.rm = TRUE),
+    total_regrets = n(),
+    .groups = "drop"
+  )
+  
+```
+
+```{r}
+ggplot(time_summary, aes(x = duration_min)) +
+  geom_histogram(bins = 30) +
+  labs(x = "Regret Duration (minutes)",
+       y = "Count",
+       title = "Distribution of Regret Episode Durations")
+
+ggplot(participant_summary, aes(x = mean_duration)) +
+  geom_histogram(bins = 25) +
+  labs(x = "Mean Duration per Participant (minutes)",
+       y = "Number of Participants")
+
+ggplot(participant_summary,
+       aes(x = reorder(PID, mean_duration), y = mean_duration)) +
+  geom_point() +
+  coord_flip() +
+  labs(x = "Participant",
+       y = "Mean Regret Duration (minutes)")
+
+ggplot(time_summary, aes(x = n_followups)) +
+  geom_histogram(binwidth = 1) +
+  labs(x = "Number of Follow-ups per Regret Episode",
+       y = "Count")
+
+ggplot(time_summary,
+       aes(x = duration_min, y = n_followups)) +
+  geom_point(alpha = .4) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Duration (minutes)",
+       y = "Number of Follow-ups")
+```
+```{r}
+time_summary |>
+  group_by(PID) |>
+  mutate(mean_duration_pid = mean(duration_min, na.rm = TRUE)) |>
+  ungroup() |>
+  ggplot(
+       aes(y = reorder(factor(PID), mean_duration_pid),
+           x = 0,
+           xend = duration_min,
+           yend = reorder(factor(PID), mean_duration_pid),
+           color = duration_min)) +
+  geom_segment(linewidth = 4) +
+  labs(
+    x = "Regret Duration (minutes)",
+    y = "Participant (ordered by mean duration)"
+  ) 
+```
+
+```{r}
+time_summary |>
+  summarise(mean_duration_pid = mean(duration_min, na.rm = TRUE)) 
+```
+
+```{r}
+pid_to_plot <- "112234"
+
+# 1) Episode-level start/end for one participant
+one_pid <- data %>%
+  filter(!is.na(regret_id)) |>
+  mutate(
+    ping_time = ymd_hms(ping_time, tz = "UTC"),
+    ping_time = with_tz(ping_time, "America/Los_Angeles")
+  ) %>%
+  filter(PID == pid_to_plot) %>%
+  arrange(regret_id, ping_time) %>%
+  group_by(regret_id) %>%
+  summarise(
+    start_time = min(ping_time, na.rm = TRUE),
+    end_time   = max(ping_time, na.rm = TRUE),
+    duration_min = as.numeric(difftime(end_time, start_time, units = "mins")),
+    duration_hr = duration_min / 60,
+    n_pings = n(),
+    .groups = "drop"
+  )
+
+# 2) Build "night" rectangles covering the full window
+# Define night as 22:00 -> 06:00 (spans midnight)
+night_start_hour <- 23
+night_end_hour   <- 9
+
+start_day <- floor_date(min(one_pid$start_time), unit = "day")
+end_day   <- ceiling_date(max(one_pid$end_time), unit = "day")
+
+days <- seq.Date(as.Date(start_day), as.Date(end_day), by = "day")
+
+night_df <- tibble(day = days) %>%
+  mutate(
+    night_start = as.POSIXct(day, tz = "America/Los_Angeles") + hours(night_start_hour),
+    night_end   = as.POSIXct(day + days(1), tz = "America/Los_Angeles") + hours(night_end_hour)
+  )
+
+# 3) Plot: night shading + regret episode segments
+ggplot() +
+  geom_rect(
+    data = night_df,
+    aes(xmin = night_start, xmax = night_end, ymin = -Inf, ymax = Inf),
+    inherit.aes = FALSE,
+    alpha = 0.12
+  ) +
+  geom_segment(
+    data = one_pid,
+    aes(
+      x = start_time,
+      xend = end_time,
+      y = 1,
+      yend = 1,
+      color = duration_hr
+    ),
+    linewidth = 6,
+    lineend = "round",
+    alpha = 0.9
+  ) +
+  scale_y_continuous(
+    breaks = 1,
+    labels = NULL,
+    expand = expansion(mult = c(0.1, 0.1))
+  ) +
+  scale_x_datetime(date_breaks = "1 day", date_labels = "%b %d") +
+  scale_color_viridis_c(option = "magma", end = 0.8, name = "Duration (hr)") +
+  labs(
+    title = paste("Timeline of daily regrets", pid_to_plot),
+    x = "Date",
+    y = NULL
+  ) +
+  theme_pubclean()
+```
+```{r}
+data |>
+  filter(PID == 112234) |>
+  select(decision, regret_intensity, regret_id, ping_time) |>
+  filter(regret_id == 3) |>
+  ggplot(aes(x = ping_time, y = regret_intensity)) +
+  geom_line(color = "#FABE82", size = 2) +
+  geom_point(
+    size = 2.5,
+    shape = 21,
+    fill = "#FABE82",
+    color = "black",
+    stroke = 1
+  ) +
+  labs(
+    x = "Date",
+    y = "Regret intensity",
+    title = paste("Regret intensity over time for PID", pid_to_plot)
+  ) +
+  scale_x_datetime(date_breaks = "1 day", date_labels = "%b %d") +
+  theme_pubclean()
+```
+
+
+```{r}
+pid_to_plot <- "101419"
+
+raw_pid <- data %>%
+  filter(!is.na(regret_id), PID == pid_to_plot) %>%
+  mutate(ping_time = with_tz(ping_time, "America/Los_Angeles")) %>%
+  filter(!is.na(ping_time)) %>%
+  arrange(regret_id, ping_time)
+
+stopifnot(nrow(raw_pid) > 0)
+
+# Episode bounds (for gray boxes)
+episodes <- raw_pid %>%
+  group_by(regret_id) %>%
+  summarise(
+    start_time = min(ping_time, na.rm = TRUE),
+    end_time   = max(ping_time, na.rm = TRUE),
+    duration_hr = as.numeric(difftime(end_time, start_time, units = "hours")),
+    .groups = "drop"
+  )
+
+# Make follow-ups sit "within" the box vertically (so they don't overlap perfectly)
+# If you have followup_id already:
+raw_pid <- raw_pid %>%
+  group_by(regret_id) %>%
+  mutate(
+    followup_rank = if ("followup_id" %in% names(.)) followup_id else row_number(),
+    y_in_box = scales::rescale(followup_rank, to = c(0.955, 1.045), na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+# Night shading (22:00 -> 06:00)
+night_start_hour <- 22
+night_end_hour   <- 6
+
+start_day <- floor_date(min(raw_pid$ping_time), unit = "day")
+end_day   <- ceiling_date(max(raw_pid$ping_time), unit = "day")
+days <- seq.Date(as.Date(start_day), as.Date(end_day), by = "day")
+
+night_df <- tibble(day = days) %>%
+  mutate(
+    night_start = as.POSIXct(day, tz = "America/Los_Angeles") + hours(night_start_hour),
+    night_end   = as.POSIXct(day + days(1), tz = "America/Los_Angeles") + hours(night_end_hour)
+  )
+
+box_half_height <- 0.06  # increase for "wider" boxes
+
+ggplot() +
+  geom_rect(
+    data = night_df,
+    aes(xmin = night_start, xmax = night_end, ymin = -Inf, ymax = Inf),
+    inherit.aes = FALSE,
+    alpha = 0.12
+  ) +
+  # Gray episode boxes
+  geom_rect(
+    data = episodes,
+    aes(
+      xmin = start_time,
+      xmax = end_time,
+      ymin = 1 - box_half_height,
+      ymax = 1 + box_half_height
+    ),
+    fill = "grey60",
+    alpha = 0.35,
+    color = NA
+  ) +
+  # Follow-up points within each box (optionally color by followup_id/rank)
+  geom_point(
+    data = raw_pid,
+    aes(
+      x = ping_time,
+      y = y_in_box,
+      shape = followup_rank == 1
+    ),
+    size = 2.2,
+    alpha = 0.9,
+    color = "black"
+  ) +
+  scale_shape_manual(values = c(`TRUE` = 16, `FALSE` = 1), guide = "none") +
+  scale_y_continuous(
+    breaks = 1,
+    labels = pid_to_plot,
+    limits = c(1 - (box_half_height + 0.08), 1 + (box_half_height + 0.08)),
+    expand = expansion(mult = c(0.1, 0.1))
+  ) +
+  scale_x_datetime(date_breaks = "1 week", date_labels = "%b %d") +
+  labs(
+    title = paste("Regret episodes with follow-ups:", pid_to_plot),
+    x = "Date",
+    y = NULL
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank()
+  )
 ```
 
 # Exploratory analyses
@@ -98,6 +478,48 @@ data |>
   stat_cor(method = "pearson")
 ```
 
+Same thing in absolute time: hours since the episode's first ping, and hours as a
+proportion of the episode's total duration (rather than the proportion of follow-ups).
+
+```{r}
+intensity_abs <- data |>
+  filter(!is.na(regret_id)) |>
+  group_by(PID, regret_id) |>
+  mutate(
+    pmc_intensity     = regret_intensity - mean(regret_intensity, na.rm = TRUE),
+    hours_since_onset = as.numeric(difftime(ping_time, min(ping_time), units = "hours")),
+    duration_hrs      = max(hours_since_onset),
+    time_percent      = hours_since_onset / duration_hrs
+  ) |>
+  ungroup()
+
+intensity_abs |>
+  filter(duration_hrs > 0) |>
+  ggplot(aes(x = time_percent, y = pmc_intensity)) +
+  geom_point(position = position_jitter(w = 0.025)) +
+  geom_smooth(method = "lm") +
+  labs(x = "Elapsed time from event onset to resolution (proportion of episode duration)",
+       y = "Regret intensity") +
+  stat_cor(method = "pearson")
+
+intensity_abs |>
+  filter(duration_hrs > 0) |>
+  ggplot(aes(x = hours_since_onset, y = regret_intensity)) +
+  geom_line(aes(group = interaction(PID, regret_id)), alpha = 0.2) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "loess") +
+  scale_x_continuous(trans = "log1p", breaks = c(0, 1, 3, 6, 12, 24, 48, 96, 168)) +
+  labs(x = "Hours since episode onset (log scale)", y = "Regret intensity")
+
+# does intensity decline with follow-up number vs. with elapsed time?
+intensity_models <- intensity_abs |> filter(!is.na(regret_intensity))
+tab_model(
+  lmer(regret_intensity ~ I(followup_id - 1) + (1 | PID), data = intensity_models),
+  lmer(regret_intensity ~ I(hours_since_onset / 24) + (1 | PID), data = intensity_models),
+  dv.labels = c("Follow-up number", "Days since onset")
+)
+```
+
 ## Single participant trajectories
 
 ```{r}
@@ -140,26 +562,99 @@ for (i in seq(1, length(p_list), by = 6)) {
 ## Strategies
 
 ```{r}
+library(forcats)
+
 data |>
   select(-(er_otherreg_text)) |>
   pivot_longer(cols = starts_with("er_"), names_to = "strategy", values_to = "value") |>
   filter(!is.na(regret_id)) |>
   filter(value == 1) |>
   mutate(strategy = case_when(
-  strategy == "er_accept" ~ "acceptance",
-  strategy == "er_distract" ~ "distraction",
-  strategy == "er_otherreg" ~ "other",
-  strategy == "er_pleasure" ~ "pleasure-seeking",
-  strategy == "er_reapp" ~ "reappraisal",
-  strategy == "er_sitmod" ~ "situation-modification",
-  strategy == "er_socsupp" ~ "social support"
-)) |>
-  ggplot(aes(x = strategy, fill = strategy)) +
-  geom_bar(position = "dodge") +
-  labs(x = "Strategy", y = "Count (N = 1,517 pings)") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-  theme(legend.position = "none") +
-  coord_flip()
+    strategy == "er_accept"   ~ "Acceptance",
+    strategy == "er_distract" ~ "Distraction",
+    strategy == "er_otherreg" ~ "Other",
+    strategy == "er_pleasure" ~ "Pleasure-seeking",
+    strategy == "er_reapp"    ~ "Reappraisal",
+    strategy == "er_sitmod"   ~ "Situation modification",
+    strategy == "er_socsupp"  ~ "Social support"
+  )) |>
+  count(strategy) |>
+  mutate(strategy = fct_reorder(strategy, n)) |>
+  ggplot(aes(x = strategy, y = n)) +
+  geom_col(aes(fill = strategy), width = 0.7) +
+  geom_text(
+    aes(label = scales::comma(n)),
+    hjust = -0.15, size = 3.5, color = "#52514e"
+  ) +
+  scale_y_continuous(
+    expand = expansion(mult = c(0, 0.12)),
+    labels = scales::comma
+  ) +
+  coord_flip(clip = "off") +
+  labs(
+    title = "Emotion regulation after a regrettable decision",
+    x = NULL,
+    y = "Count"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_line(color = "#e1e0d9", linewidth = 0.3),
+    axis.text.y = element_text(color = "#0b0b0b", size = 11),
+    axis.text.x = element_text(color = "#898781"),
+    axis.title.x = element_text(color = "#52514e"),
+    plot.title = element_text(face = "bold", size = 14, color = "#0b0b0b"),
+    plot.subtitle = element_text(color = "#52514e", margin = margin(b = 12)),
+    plot.margin = margin(10, 30, 10, 10),
+  ) +
+ theme(legend.position = "none")
+  
+
+library(forcats)
+
+data |>
+  select(-(er_otherreg_text)) |>
+  pivot_longer(cols = starts_with("reverse_"), names_to = "reverse", values_to = "value") |>
+  filter(!is.na(regret_id)) |>
+  filter(value > 1) |>
+  mutate(strategy = case_when(
+    reverse == "reverse_makeup"   ~ "Making up",
+    reverse == "reverse_undo" ~ "Undoing",
+    reverse == "reverse_plan" ~ "Planning",
+    reverse == "reverse_amends" ~ "Making amends"
+  )) |>
+  count(strategy) |>
+  mutate(strategy = fct_reorder(strategy, n)) |>
+  ggplot(aes(x = strategy, y = n)) +
+  geom_col(aes(fill = strategy), width = 0.7) +
+  geom_text(
+    aes(label = scales::comma(n)),
+    hjust = -0.15, size = 3.5, color = "#52514e"
+  ) +
+  scale_y_continuous(
+    expand = expansion(mult = c(0, 0.12)),
+    labels = scales::comma
+  ) +
+  coord_flip(clip = "off") +
+  labs(
+    title = "Behavior after a regrettable decision",
+    x = NULL,
+    y = "Count"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_line(color = "#e1e0d9", linewidth = 0.3),
+    axis.text.y = element_text(color = "#0b0b0b", size = 11),
+    axis.text.x = element_text(color = "#898781"),
+    axis.title.x = element_text(color = "#52514e"),
+    plot.title = element_text(face = "bold", size = 14, color = "#0b0b0b"),
+    plot.subtitle = element_text(color = "#52514e", margin = margin(b = 12)),
+    plot.margin = margin(10, 30, 10, 10),
+  ) +
+ theme(legend.position = "none")
   
 ```
 

@@ -2,3 +2,16 @@
 .Rhistory
 .RData
 .Ruserdata
+code/analyses_with_expl.Rmd
+code/domain_coding.R
+code/report.Rmd
+coding/regret_domain_codes.csv
+data/kpetrova_export.zip
+.gitignore
+data/ping_validation_log.csv
+data/kpetrova_export/export_details.json
+data/kpetrova_export/kpetrova_participants.csv
+.gitignore
+.gitignore
+data/kpetrova_export/kpetrova_pings.csv
+reports/regret_ema_report.html
